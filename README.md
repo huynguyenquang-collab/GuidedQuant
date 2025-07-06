@@ -1,14 +1,18 @@
 <p align=center>
 <div align=center>
+<a href="https://jusjinuk.me/blog/guidedquant/">
 <img src="assets/guidedquant-logo.png" width=350>
+</a>
 </div>
 <h1 align="center">GuidedQuant</h1>
 </p>
 <p align="center"><b>Smarter LLM Post-Training Quantization using End Loss Guidance</b>, boosting the performance of <br> state-of-the-art <i>weight-only scalar</i>, <i>weight-only vector</i>, and <i>weight-and-activation</i> quantization methods.</p>
 <p align="center">
 <a href="https://arxiv.org/abs/2505.07004"><img src="https://img.shields.io/badge/arXiv-2505.07004-b31b1b.svg"></a>
-<a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow"></a>
+<a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-orange"></a>
 <a href="https://jusjinuk.me/blog/guidedquant/"><img src="https://img.shields.io/badge/Blog-GuidedQuant-blue"></a>
+<a href="https://drive.google.com/file/d/1L5GSu4ogS2P3WWU1fqJELttgOXHUd5Jt/view"><img src="https://img.shields.io/badge/Poster-GuidedQuant-green"></a>
+<a href="https://huggingface.co/collections/jusjinuk/instruction-tuned-models-guidedquant-68334269c44cd3eb21f7bd61"><img src="https://img.shields.io/badge/Models-HuggingFace-yellow"></a>
 </p>
 
 # News
