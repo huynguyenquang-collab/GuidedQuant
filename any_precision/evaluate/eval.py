@@ -222,11 +222,11 @@ def _load_c4_validation_stream(n_samples, cache_dir, seed, verbose):
     for item in tqdm(dataset, total=n_samples, desc="Collecting C4", disable=not verbose):
         if len(texts) >= n_samples:
             break
-        text = item["text"].strip()
-        if len(text) > 500:
-            texts.append(text)
+        if len(item["text"].strip()) > 500:
+            texts.append(item["text"])
 
-    joined_texts = ["\n\n".join(texts)]
+    full_text = "\n\n".join(texts)
+    joined_texts = [full_text]
     logprint(verbose, f"Caching C4 stream to {cache_file}")
     with open(cache_file, "wb") as handle:
         pickle.dump(joined_texts, handle)
