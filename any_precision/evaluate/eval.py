@@ -6,7 +6,9 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from ..modules import AnyPrecisionForCausalLM
 import os
 import json
+import pickle
 import lm_eval
+from datasets import load_dataset
 
 current_dir = os.path.dirname(os.path.realpath(__file__))
 
@@ -161,8 +163,154 @@ def auto_model_load(model_path, device='cuda', dtype=torch.float16, verbose=True
     return tokenizer_type, tokenizer, model
 
 
+def _get_hf_token():
+    return os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+
+
+def _get_model_device(model):
+    if hasattr(model, "device"):
+        return model.device
+    return next(model.parameters()).device
+
+
+def _load_wikitext2_stream(cache_dir, seed, verbose):
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_file = os.path.join(cache_dir, f"wikitext2_test_seed{seed}.pkl")
+    if os.path.exists(cache_file):
+        logprint(verbose, f"Loading WikiText-2 stream from cache: {cache_file}")
+        with open(cache_file, "rb") as handle:
+            return pickle.load(handle)
+
+    logprint(verbose, "Loading WikiText-2 test stream...")
+    dataset = load_dataset(
+        "Salesforce/wikitext",
+        "wikitext-2-raw-v1",
+        split="test",
+        token=_get_hf_token(),
+    )
+    full_text = "\n".join([text for text in dataset["text"] if text])
+    texts = [full_text]
+
+    logprint(verbose, f"Caching WikiText-2 stream to {cache_file}")
+    with open(cache_file, "wb") as handle:
+        pickle.dump(texts, handle)
+    return texts
+
+
+def _load_c4_validation_stream(n_samples, cache_dir, seed, verbose):
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_file = os.path.join(cache_dir, f"c4_validation_n{n_samples}_seed{seed}.pkl")
+    if os.path.exists(cache_file):
+        logprint(verbose, f"Loading C4 stream from cache: {cache_file}")
+        with open(cache_file, "rb") as handle:
+            return pickle.load(handle)
+
+    logprint(verbose, f"Loading C4 validation stream ({n_samples} documents)...")
+    dataset = load_dataset(
+        "allenai/c4",
+        "en",
+        split="validation",
+        streaming=True,
+        token=_get_hf_token(),
+    )
+    texts = []
+    for item in tqdm(dataset, total=n_samples, desc="Collecting C4", disable=not verbose):
+        if len(texts) >= n_samples:
+            break
+        text = item["text"].strip()
+        if len(text) > 500:
+            texts.append(text)
+
+    joined_texts = ["\n\n".join(texts)]
+    logprint(verbose, f"Caching C4 stream to {cache_file}")
+    with open(cache_file, "wb") as handle:
+        pickle.dump(joined_texts, handle)
+    return joined_texts
+
+
+def _load_ppl_texts(testcase_name, eval_samples, cache_dir, seed, verbose):
+    if "wikitext2" in testcase_name.lower():
+        return _load_wikitext2_stream(cache_dir, seed, verbose)
+    if "c4" in testcase_name.lower():
+        return _load_c4_validation_stream(eval_samples, cache_dir, seed, verbose)
+    raise ValueError(f"Sliding-window PPL supports wikitext2 and c4, got {testcase_name}")
+
+
 @torch.no_grad()
-def evaluate_ppl(model, tokenizer, testcases, verbose=True, chunk_size=2048, tokenizer_type=None):
+def _evaluate_sliding_window_ppl(model, tokenizer, texts, max_length, stride, verbose=True):
+    device = _get_model_device(model)
+    nlls = []
+    total_tokens = 0
+
+    for text in texts:
+        encodings = tokenizer(text, return_tensors="pt", add_special_tokens=False)
+        input_ids = encodings.input_ids
+
+        if tokenizer.bos_token_id is not None:
+            if input_ids.shape[1] == 0 or input_ids[0, 0].item() != tokenizer.bos_token_id:
+                bos_tensor = torch.tensor([[tokenizer.bos_token_id]], device=input_ids.device)
+                input_ids = torch.cat([bos_tensor, input_ids], dim=1)
+
+        if input_ids.size(1) > max_length * 200:
+            input_ids = input_ids[:, : max_length * 200]
+
+        input_ids = input_ids.to(device)
+        seq_len = input_ids.size(1)
+        if seq_len < 2:
+            continue
+
+        window_range = list(range(0, seq_len, stride))
+        logprint(verbose, f"Processing {seq_len:,} tokens in {len(window_range):,} windows...")
+
+        prev_end_loc = 0
+        pbar = tqdm(window_range, desc="Windows", unit="win", leave=False, disable=not verbose)
+        for begin_loc in pbar:
+            end_loc = min(begin_loc + max_length, seq_len)
+            trg_len = end_loc - prev_end_loc
+
+            input_chunk = input_ids[:, begin_loc:end_loc]
+            target_chunk = input_chunk.clone()
+            if begin_loc > 0:
+                target_chunk[:, :-trg_len] = -100
+
+            if target_chunk.size(1) == 0:
+                break
+
+            outputs = model(input_chunk, labels=target_chunk)
+            neg_log_likelihood = outputs.loss * trg_len
+            nlls.append(neg_log_likelihood)
+            prev_end_loc = end_loc
+
+            current_nll = torch.stack(nlls).sum()
+            current_ppl = torch.exp(current_nll / (total_tokens + prev_end_loc)).item()
+            pbar.set_postfix({"PPL": f"{current_ppl:.4f}", "tokens": f"{total_tokens + prev_end_loc:,}"})
+
+            if end_loc == seq_len:
+                break
+
+        total_tokens += seq_len
+
+    if not nlls:
+        return None
+
+    total_nll = torch.stack(nlls).sum()
+    perplexity = torch.exp(total_nll / total_tokens).item()
+    return {"perplexity": perplexity, "total_tokens": total_tokens}
+
+
+@torch.no_grad()
+def evaluate_ppl(
+        model,
+        tokenizer,
+        testcases,
+        verbose=True,
+        chunk_size=2048,
+        tokenizer_type=None,
+        stride=512,
+        eval_samples=2000,
+        cache_dir="./dataset_cache",
+        seed=42,
+        return_details=False):
     """
     Args:
         model: model to evaluate
@@ -176,7 +324,10 @@ def evaluate_ppl(model, tokenizer, testcases, verbose=True, chunk_size=2048, tok
     Returns:
         A dictionary of perplexity scores, with keys being the testcases names and values being the perplexity scores.
 
-    Note that the perplexity scores are calculated over non-overlapping chunks of the test set.
+    The perplexity scores are calculated with the same sliding-window protocol
+    used by NonUQuantFix/RBVTSlidingWindowEvaluator: WikiText-2 and C4 are
+    tokenized as continuous streams, evaluated with max_length=chunk_size and
+    stride=stride, and capped at max_length * 200 tokens per stream.
     """
 
     if isinstance(model, AnyPrecisionForCausalLM):
@@ -198,37 +349,28 @@ def evaluate_ppl(model, tokenizer, testcases, verbose=True, chunk_size=2048, tok
         for testcase_name in testcases:
             vprint(verbose, f"---------------------- {testcase_name} ----------------------")
 
-            input_tokens = _load_input_tokens(tokenizer_type, testcase_name, tokenizer, chunk_size, verbose)
+            texts = _load_ppl_texts(testcase_name, eval_samples, cache_dir, seed, verbose)
+            logprint(verbose, "Calculating sliding-window perplexity...")
 
-            input_tokens.to(model.device)
+            dataset_result = _evaluate_sliding_window_ppl(
+                model,
+                tokenizer,
+                texts,
+                max_length=chunk_size,
+                stride=stride,
+                verbose=verbose,
+            )
+            if dataset_result is None:
+                logprint(verbose, "Perplexity failed: no usable tokens")
+                continue
 
-            logprint(verbose, "Calculating perplexity...")
+            logprint(
+                verbose,
+                f"Perplexity: {dataset_result['perplexity']} | tokens={dataset_result['total_tokens']:,}",
+            )
 
-            seq_len = input_tokens.input_ids.size(1)
-            nsamples = seq_len // chunk_size  # floor(seq_len / chunk_size)
-
-            neg_log_likelihoods = []
-            for i in tqdm(range(nsamples), disable=not verbose):
-                begin_loc = i * chunk_size
-
-                input_ids = input_tokens.input_ids[:, begin_loc:begin_loc + chunk_size]
-
-                # add BOS token for Gemma-7B
-                # https://github.com/huggingface/transformers/issues/29250
-                if 'gemma' in model.config.architectures[0].lower():
-                    # Mostly harmless to other models, but a slight drop in ppl is observed
-                    # Hence, we only add the BOS token for Gemma models for now
-                    input_ids[:, 0] = tokenizer.bos_token_id
-
-                with torch.no_grad():
-                    outputs = model(input_ids, labels=input_ids)
-                    neg_log_likelihood = outputs.loss
-                    neg_log_likelihoods.append(neg_log_likelihood)
-
-            ppl = torch.exp(torch.stack(neg_log_likelihoods).mean())
-            logprint(verbose, f"Perplexity: {ppl.item()}")
-
-            results[f"{testcase_name}:{bit}-bit"] = ppl.item()
+            key = f"{testcase_name}:{bit}-bit"
+            results[key] = dataset_result if return_details else dataset_result["perplexity"]
 
         if not is_anyprec:
             break

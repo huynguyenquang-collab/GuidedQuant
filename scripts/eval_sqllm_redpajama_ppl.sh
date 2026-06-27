@@ -11,9 +11,12 @@ MODEL_BASENAME="${MODEL_NAME##*/}"
 BITS="${BITS:-4}"
 MODEL_PATH="${MODEL_PATH:-cache/packed/anyprec-${MODEL_BASENAME}-w${BITS}_orig${BITS}-redpajama_s1024_blk4096}"
 OUTPUT_FILE="${OUTPUT_FILE:-results_sqllm_redpajama_ppl_${MODEL_BASENAME}_${BITS}bit.json}"
-CHUNK_SIZE="${CHUNK_SIZE:-2048}"
+PPL_MAX_LENGTH="${PPL_MAX_LENGTH:-${CHUNK_SIZE:-2048}}"
+PPL_STRIDE="${PPL_STRIDE:-512}"
+PPL_EVAL_SAMPLES="${PPL_EVAL_SAMPLES:-2000}"
+PPL_CACHE_DIR="${PPL_CACHE_DIR:-./dataset_cache}"
 
-python - "$MODEL_PATH" "$OUTPUT_FILE" "$CHUNK_SIZE" <<'PY'
+python - "$MODEL_PATH" "$OUTPUT_FILE" "$PPL_MAX_LENGTH" "$PPL_STRIDE" "$PPL_EVAL_SAMPLES" "$PPL_CACHE_DIR" <<'PY'
 import json
 import sys
 
@@ -21,7 +24,10 @@ from any_precision.evaluate import eval
 
 model_path = sys.argv[1]
 output_file = sys.argv[2]
-chunk_size = int(sys.argv[3])
+max_length = int(sys.argv[3])
+stride = int(sys.argv[4])
+eval_samples = int(sys.argv[5])
+cache_dir = sys.argv[6]
 datasets = ["wikitext2", "c4"]
 
 tokenizer_type, tokenizer, model = eval.auto_model_load(model_path)
@@ -30,15 +36,23 @@ results = eval.evaluate_ppl(
     tokenizer,
     datasets,
     verbose=True,
-    chunk_size=chunk_size,
+    chunk_size=max_length,
     tokenizer_type=tokenizer_type,
+    stride=stride,
+    eval_samples=eval_samples,
+    cache_dir=cache_dir,
+    return_details=True,
 )
 
 with open(output_file, "w", encoding="utf-8") as handle:
     json.dump(
         {
             "model_path": model_path,
-            "chunk_size": chunk_size,
+            "protocol": "nonuquant_sliding_window",
+            "max_length": max_length,
+            "stride": stride,
+            "eval_samples": eval_samples,
+            "cache_dir": cache_dir,
             "ppl": results,
         },
         handle,
