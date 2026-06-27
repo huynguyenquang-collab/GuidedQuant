@@ -5,6 +5,7 @@ import logging
 import torch
 from tqdm import tqdm
 import os
+from urllib.request import urlopen
 from .torch_load import torch_load
 
 def _get_wikitext2(split):
@@ -52,7 +53,53 @@ def _get_pileval(split):
 
 def _get_redpajama(split):
     assert split in ['train'], "RedPajama only has a train split"
-    data = load_dataset("togethercomputer/RedPajama-Data-1T-Sample", split=split)
+    dataset_name = os.environ.get("REDPAJAMA_DATASET", "togethercomputer/RedPajama-Data-1T")
+    dataset_config = os.environ.get("REDPAJAMA_CONFIG") or None
+    streaming = os.environ.get("REDPAJAMA_STREAMING", "1").lower() not in {"0", "false", "no"}
+    use_url_lists = os.environ.get("REDPAJAMA_USE_URL_LISTS", "1").lower() not in {"0", "false", "no"}
+
+    if dataset_name == "togethercomputer/RedPajama-Data-1T" and streaming and use_url_lists:
+        subsets = [
+            subset.strip()
+            for subset in os.environ.get("REDPAJAMA_SUBSETS", "common_crawl").split(",")
+            if subset.strip()
+        ]
+        files_per_subset = int(os.environ.get("REDPAJAMA_FILES_PER_SUBSET", "1"))
+        data_files = []
+        for subset in subsets:
+            list_url = (
+                "https://huggingface.co/datasets/togethercomputer/RedPajama-Data-1T"
+                f"/resolve/main/urls/{subset}.txt"
+            )
+            logging.info(f"Loading RedPajama URL list: {list_url}")
+            with urlopen(list_url) as response:
+                urls = response.read().decode("utf-8").splitlines()
+            selected_urls = [url for url in urls if url.strip()][:files_per_subset]
+            if not selected_urls:
+                raise RuntimeError(f"No RedPajama URLs found for subset={subset}")
+            data_files.extend(selected_urls)
+
+        logging.info(
+            f"Streaming RedPajama JSONL directly from {len(data_files)} files "
+            f"(subsets={','.join(subsets)}, files_per_subset={files_per_subset})"
+        )
+        data = load_dataset("json", data_files={split: data_files}, split=split, streaming=True)
+        return (item["text"] for item in data if item.get("text"))
+
+    logging.info(
+        f"Loading RedPajama from {dataset_name}"
+        f"{f'/{dataset_config}' if dataset_config else ''}"
+        f" with streaming={streaming}"
+    )
+
+    if dataset_config is not None:
+        data = load_dataset(dataset_name, dataset_config, split=split, streaming=streaming)
+    else:
+        data = load_dataset(dataset_name, split=split, streaming=streaming)
+
+    if streaming:
+        return (item["text"] for item in data if item.get("text"))
+
     return data['text']
 
 
@@ -120,6 +167,32 @@ def _sample_and_tokenize_from_middle(texts, tokenizer, seq_len, num_samples, see
     return samples
 
 
+def _sample_and_tokenize_stream_from_middle(texts, tokenizer, seq_len, num_samples):
+    samples = []
+    pbar = tqdm(total=num_samples, desc="Sampling and tokenizing")
+    for text in texts:
+        tokens = tokenizer(text, return_tensors='pt')['input_ids'][0]
+        if len(tokens) < seq_len:
+            continue
+
+        seq_start = random.randint(0, len(tokens) - seq_len)
+        tokens = tokens[seq_start:seq_start + seq_len]
+        assert tokens.shape[-1] == seq_len, f"Token length {len(tokens)} != seq_len {seq_len}"
+
+        samples.append(tokens)
+        pbar.update(1)
+        if len(samples) >= num_samples:
+            break
+    pbar.close()
+
+    if len(samples) < num_samples:
+        raise RuntimeError(
+            f"Only sampled {len(samples)} RedPajama examples of length {seq_len}; "
+            f"needed {num_samples}."
+        )
+    return samples
+
+
 def _sample_concat_and_tokenize(texts, tokenizer, seq_len, num_samples, seed=None):
     assert num_samples <= len(texts), \
     f"num_samples({num_samples}) should be less than or equal to the number of texts({len(texts)})"
@@ -184,7 +257,12 @@ def get_tokens(dataset_name, split, tokenizer, seq_len, num_samples, save_path=N
         tokens = _sample_concat_and_tokenize(texts, tokenizer, seq_len, num_samples, seed)
     elif dataset_name == 'redpajama':
         # Following PV-Tuning Github.
-        tokens = _sample_and_tokenize_from_middle(texts, tokenizer, seq_len, num_samples, seed)
+        random.seed(seed)
+        np.random.seed(seed)
+        if not hasattr(texts, "__len__"):
+            tokens = _sample_and_tokenize_stream_from_middle(texts, tokenizer, seq_len, num_samples)
+        else:
+            tokens = _sample_and_tokenize_from_middle(texts, tokenizer, seq_len, num_samples, seed)
     else:
         tokens = _sample_and_tokenize(texts, tokenizer, seq_len, num_samples, seed)
 
