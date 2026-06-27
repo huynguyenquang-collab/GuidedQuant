@@ -49,8 +49,8 @@ def any_precision_quantize(
         ]
     )
 
-    assert mode in ['tokens', 'gradients', 'quantize', 'pack'], \
-        "mode must be one of 'tokens', 'gradients', 'quantize', or 'pack'. Use 'pack' to run the entire pipeline."
+    assert mode in ['tokens', 'gradients', 'quantize', 'pack', 'pack_only'], \
+        "mode must be one of 'tokens', 'gradients', 'quantize', 'pack', or 'pack_only'. Use 'pack' to run the entire pipeline."
 
     if overwrite_tokens:
         if not overwrite_gradients:
@@ -76,6 +76,8 @@ def any_precision_quantize(
         logging.info("Running: [Tokens -> Gradients]")
     elif mode == 'quantize':
         logging.info("Running: [Tokens -> Gradients -> Quantize]")
+    elif mode == 'pack_only':
+        logging.info("Running: [Pack]")
     else:
         logging.info("Running: [Tokens -> Gradients -> Quantize -> Pack]")
 
@@ -116,6 +118,32 @@ def any_precision_quantize(
     logging.info(f"Saliency cache path: {saliency_cache_path}")
     logging.info(f"Quantized cache path: {quantized_cache_path}")
     logging.info(f"Model output path: {model_output_path}")
+
+    if mode == 'pack_only':
+        logging.info("------------------- Pack -------------------")
+        if not os.path.isdir(quantized_cache_path):
+            raise FileNotFoundError(f"Quantized cache path does not exist: {quantized_cache_path}")
+
+        if os.path.exists(model_output_path) and os.path.isdir(model_output_path) and os.listdir(model_output_path):
+            if overwrite_pack:
+                logging.info(f"Model output path {model_output_path} already exists and is not empty. Will delete and "
+                             f"re-pack.")
+                shutil.rmtree(model_output_path)
+            else:
+                logging.info(f"Model output path {model_output_path} already exists and is not empty. Will skip packing.")
+                return
+
+        analyzer.drop_original_weights()
+        pack(
+            analyzer=analyzer,
+            lut_path=quantized_cache_path,
+            output_model_path=model_output_path,
+            seed_precision=seed_precision,
+            parent_precision=parent_precision,
+            cpu_count=cpu_count,
+            dns=dns,
+        )
+        return
 
     # ------------------- Get tokens -------------------
 
