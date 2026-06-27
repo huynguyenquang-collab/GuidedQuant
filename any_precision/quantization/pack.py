@@ -89,11 +89,17 @@ def _process_layer_data(args):
     layer_data = {}
 
     weightpath = os.path.join(lut_path, 'weights', f'l{layer_idx}.pt')
-    layer_weights = torch_load(weightpath)
+    try:
+        layer_weights = torch_load(weightpath)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to load packed weight cache for layer {layer_idx}: {weightpath}") from exc
 
     misc_weightpath = os.path.join(lut_path, 'misc_weights', f'l{layer_idx}.pt')
     if os.path.exists(misc_weightpath):
-        layer_misc_weights = torch_load(misc_weightpath)
+        try:
+            layer_misc_weights = torch_load(misc_weightpath)
+        except Exception as exc:
+            raise RuntimeError(f"Failed to load misc weight cache for layer {layer_idx}: {misc_weightpath}") from exc
 
     for i, name in enumerate(module_names):
         N, group_count, group_size = layer_weights[name].shape
@@ -115,7 +121,10 @@ def _process_layer_data(args):
 
         for bit in range(seed_precision, parent_precision + 1):
             layer_lut_path = os.path.join(lut_path, f'lut_{bit}', f'l{layer_idx}.pt')
-            layer_lut = torch_load(layer_lut_path)
+            try:
+                layer_lut = torch_load(layer_lut_path)
+            except Exception as exc:
+                raise RuntimeError(f"Failed to load LUT cache for layer {layer_idx}, bit {bit}: {layer_lut_path}") from exc
 
             curLUT = np.empty((N, 2 ** bit), dtype=np.float16)
             for r_idx in range(N):
