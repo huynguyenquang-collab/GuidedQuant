@@ -71,12 +71,15 @@ class AnyPrecisionForCausalLM(nn.Module):
         if not os.path.exists(model_path):
             model_path = snapshot_download(model_path, local_dir=local_dir)
 
-        # loads the weights into modules and distributes
-        # across available devices automatically
+        forced_device = os.environ.get("GUIDEDQUANT_CUDA_DEVICE")
+        device_map = {"": f"cuda:{forced_device}"} if forced_device is not None else "auto"
+
+        # loads the weights into modules and distributes across available devices automatically,
+        # unless GUIDEDQUANT_CUDA_DEVICE pins the model to one logical CUDA device.
         load_checkpoint_and_dispatch(
             self.model,
             checkpoint=model_path,
-            device_map="auto",
+            device_map=device_map,
             no_split_module_classes=[self.layer_type],
             dtype=torch_dtype,
         )

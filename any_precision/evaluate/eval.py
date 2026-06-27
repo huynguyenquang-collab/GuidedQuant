@@ -146,7 +146,9 @@ def auto_model_load(model_path, device='cuda', dtype=torch.float16, verbose=True
         model = AnyPrecisionForCausalLM.from_quantized(model_path)
     else:
         tokenizer = AutoTokenizer.from_pretrained(model_path)
-        model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=dtype, device_map="auto",
+        forced_device = os.environ.get("GUIDEDQUANT_CUDA_DEVICE")
+        device_map = {"": f"cuda:{forced_device}"} if forced_device is not None else "auto"
+        model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=dtype, device_map=device_map,
                                                      trust_remote_code=True)
 
     logprint(verbose, f"{model.__class__.__name__} model loaded to device: {model.device}")

@@ -5,6 +5,7 @@ import logging
 from typing import Optional, Tuple
 from .config import *
 from any_precision.analyzer import dispatch_model
+from any_precision.analyzer.utils import get_target_cuda_device
 
 
 def get_gradients(
@@ -56,14 +57,14 @@ def get_gradients(
     # 2) Prepare model
     # ----------------------------------------------------------------
     model = analyzer.model
-    if torch.cuda.device_count() > 1:
+    if torch.cuda.device_count() > 1 or os.environ.get("GUIDEDQUANT_CUDA_DEVICE") is not None:
         model = dispatch_model(model)
 
     model = model.bfloat16()
     model.eval()
 
     if model.device.type != 'cuda' and torch.cuda.device_count() == 1:
-        model.cuda()
+        model.to(get_target_cuda_device())
 
     layers = analyzer.get_layers()
 

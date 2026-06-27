@@ -1,6 +1,11 @@
+import os
 import torch
 from transformers import AutoModelForCausalLM, PreTrainedModel, AutoTokenizer, PreTrainedTokenizerBase
 from .splitted_models import SplittedLlamaModel
+
+
+def get_target_cuda_device():
+    return f"cuda:{os.environ.get('GUIDEDQUANT_CUDA_DEVICE', '0')}"
 
 
 def load_model(model_str_or_model, dtype=torch.float16):
@@ -23,11 +28,12 @@ def load_model(model_str_or_model, dtype=torch.float16):
 
 
 def dispatch_model(model):
+    target_device = get_target_cuda_device()
     if model.config.architectures[0] == 'LlamaForCausalLM':
         model.model.__class__ = SplittedLlamaModel
         model.model.config.use_cache = False
         model.model.set_devices()
-        model.lm_head.to("cuda:0")
+        model.lm_head.to(target_device)
         return model
     elif model.config.architectures[0] == 'Qwen3ForCausalLM':
         from .splitted_models.qwen3 import SplittedQwen3Model
@@ -35,16 +41,16 @@ def dispatch_model(model):
         model.model.__class__ = SplittedQwen3Model
         model.model.config.use_cache = False
         model.model.set_devices()
-        model.lm_head.to("cuda:0")
+        model.lm_head.to(target_device)
         return model
     elif model.config.architectures[0] == 'Gemma3ForConditionalGeneration':
         from .splitted_models.gemma3 import SplittedGemma3TextModel
 
-        model.to("cuda:0")
+        model.to(target_device)
         model.model.language_model.__class__ = SplittedGemma3TextModel
         model.model.language_model.config.use_cache = False
         model.model.language_model.set_devices()
-        model.lm_head.to("cuda:0")
+        model.lm_head.to(target_device)
         return model
     else:
         raise NotImplementedError(f"Model {model.config.architectures[0]} is not supported")

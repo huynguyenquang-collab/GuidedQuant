@@ -1,3 +1,4 @@
+import os
 import torch
 from transformers.models.llama.modeling_llama import LlamaModel
 from transformers.modeling_outputs import BaseModelOutputWithPast
@@ -13,18 +14,27 @@ except ImportError:
 class SplittedLlamaModel(LlamaModel):
 
     def set_devices(self):
+        forced_device = os.environ.get("GUIDEDQUANT_CUDA_DEVICE")
+        if forced_device is not None:
+            self.split_gpus = False
+            self.primary_device = f"cuda:{forced_device}"
+            print(f"using {self.primary_device}")
+            self.to(self.primary_device)
+            return
+
         num_visible_devices = torch.cuda.device_count()
         assert num_visible_devices > 0, "Must use at least one GPU"
         self.split_gpus = num_visible_devices > 1
+        self.primary_device = "cuda:0"
         print(f"splitting into {num_visible_devices} GPUs")
         if not self.split_gpus:
-            self.cuda()
+            self.to(self.primary_device)
         else:
             # For larger model, we need to split the model into multiple GPUs
             # assign the embedding and norm onto the 1st devide
-            self.embed_tokens.to(f"cuda:0")
-            self.rotary_emb.to(f"cuda:0")
-            self.norm.to(f"cuda:0")
+            self.embed_tokens.to(self.primary_device)
+            self.rotary_emb.to(self.primary_device)
+            self.norm.to(self.primary_device)
             # layers are divided into #(num GPUs) chunks
             self.split_indices = []
             prev_device = 0
@@ -162,15 +172,15 @@ class SplittedLlamaModel(LlamaModel):
 
             # Move activations back to the 1st device at the end
             if self.split_gpus and idx == len(self.layers) - 1:
-                hidden_states = hidden_states.to("cuda:0")
+                hidden_states = hidden_states.to(self.primary_device)
                 new_position_embeddings = []
                 for position_embedding in position_embeddings:
-                    new_position_embeddings.append(position_embedding.to(f"cuda:0"))
+                    new_position_embeddings.append(position_embedding.to(self.primary_device))
                 position_embeddings = tuple(new_position_embeddings)
                 if causal_mask is not None:
-                    causal_mask = causal_mask.to("cuda:0")
-                position_ids = position_ids.to("cuda:0")
-                cache_position = cache_position.to("cuda:0")
+                    causal_mask = causal_mask.to(self.primary_device)
+                position_ids = position_ids.to(self.primary_device)
+                cache_position = cache_position.to(self.primary_device)
 
             if use_cache and isinstance(layer_outputs, tuple):
                 next_decoder_cache = layer_outputs[2 if output_attentions else 1]

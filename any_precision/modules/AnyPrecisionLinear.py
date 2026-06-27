@@ -52,7 +52,8 @@ class AnyPrecisionLinear(nn.Module):
         else:
             self.bias = None
 
-        self.output = torch.zeros((1, 1, self.out_features), dtype=torch.float16, device='cuda')
+        output_device = device if device is not None else 'cuda'
+        self.output = torch.zeros((1, 1, self.out_features), dtype=torch.float16, device=output_device)
 
     def prune_precisions(self):
         self.qweight = self.qweight[:max(self.precisions)]
