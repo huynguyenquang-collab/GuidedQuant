@@ -7,6 +7,7 @@ from typing import Optional, Tuple
 from .config import *
 from any_precision.analyzer import dispatch_model
 from any_precision.analyzer.utils import get_target_cuda_device
+from .torch_load import torch_load
 
 
 def _chunked_causal_lm_loss(logits, labels, chunk_size):
@@ -66,7 +67,7 @@ def get_gradients(
     if save_path is not None and os.path.isfile(save_path):
         logging.info(f"Gradients already calculated and saved at {save_path}.")
         logging.info(f"Loading cached gradients...")
-        return torch.load(save_path)
+        return torch_load(save_path)
 
     logging.info(f"Calculating gradients on {len(input_tokens)} tokens...")
 

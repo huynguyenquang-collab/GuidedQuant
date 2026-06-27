@@ -5,6 +5,7 @@ import logging
 import torch
 from tqdm import tqdm
 import os
+from .torch_load import torch_load
 
 def _get_wikitext2(split):
     assert split in ['train', 'validation', 'test'], f"Unknown split {split} for wikitext2"
@@ -173,7 +174,7 @@ def get_tokens(dataset_name, split, tokenizer, seq_len, num_samples, save_path=N
 
     if save_path is not None and os.path.isfile(save_path):
         logging.info(f"Loading tokens from {save_path}")
-        return torch.load(save_path)
+        return torch_load(save_path)
 
     logging.info(f"Fetching dataset: {dataset_name}")
     texts = _get_dataset(dataset_name, split)
