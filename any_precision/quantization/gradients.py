@@ -165,6 +165,11 @@ def get_gradients(
         for module in analyzer.get_modules(layer_idx).values():
             weight_hooks.append(module.weight.register_hook(square_grad_hook))
 
+    gradient_accumulators = [
+        {module_name: None for module_name in analyzer.get_modules(layer).keys()}
+        for layer in layers
+    ]
+
     # ----------------------------------------------------------------
     # 5) Forward/backward pass over data
     # ----------------------------------------------------------------
@@ -179,6 +184,21 @@ def get_gradients(
             outputs = model(input_ids=tokens, labels=tokens)
             loss = outputs.loss
         loss.backward()
+
+        for layer_idx, layer in enumerate(layers):
+            for module_name, module in analyzer.get_modules(layer).items():
+                if module.weight.grad is None:
+                    continue
+
+                grad = module.weight.grad.detach().cpu().float()
+                if gradient_accumulators[layer_idx][module_name] is None:
+                    gradient_accumulators[layer_idx][module_name] = grad
+                else:
+                    gradient_accumulators[layer_idx][module_name].add_(grad)
+                module.weight.grad = None
+
+        del outputs, loss, tokens
+        torch.cuda.empty_cache()
 
     # ----------------------------------------------------------------
     # 6) Remove hooks
@@ -198,10 +218,10 @@ def get_gradients(
     # 8) Harvest the weight gradients
     # ----------------------------------------------------------------
     gradients = []
-    for layer_idx in layers:
+    for layer_idx, layer in enumerate(layers):
         gradients_per_layer = {}
-        for module_name, module in analyzer.get_modules(layer_idx).items():
-            gradients_per_layer[module_name] = module.weight.grad
+        for module_name in analyzer.get_modules(layer).keys():
+            gradients_per_layer[module_name] = gradient_accumulators[layer_idx][module_name]
         gradients.append(gradients_per_layer)
 
     # ----------------------------------------------------------------
