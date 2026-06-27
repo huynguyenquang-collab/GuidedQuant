@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import os
 
 try:
     import ap_gemv
@@ -52,9 +53,25 @@ class AnyPrecisionLinear(nn.Module):
 
         output_device = device if device is not None else 'cuda'
         self.output = torch.zeros((1, 1, self.out_features), dtype=torch.float16, device=output_device)
+        self._dequant_weight_cache = {}
 
-    def _dequant_weight_fallback(self, w_bits):
+    def _should_cache_dequant_weight(self):
+        value = os.environ.get("GUIDEDQUANT_CACHE_DEQUANT", "0").lower()
+        return value in {"1", "true", "yes", "on"}
+
+    def _dequant_cache_key(self, w_bits):
+        device = self.qweight.device
+        return (w_bits, device.type, device.index)
+
+    def _dequant_weight_fallback(self, w_bits, use_cache=None):
         from any_precision.quantization.pack import unpack_single_weight
+
+        if use_cache is None:
+            use_cache = self._should_cache_dequant_weight()
+
+        cache_key = self._dequant_cache_key(w_bits)
+        if use_cache and cache_key in self._dequant_weight_cache:
+            return self._dequant_weight_cache[cache_key]
 
         parent_precision = self.qweight.shape[0]
         indices = unpack_single_weight(self.qweight.detach().cpu(), parent_precision).squeeze(1)
@@ -63,7 +80,20 @@ class AnyPrecisionLinear(nn.Module):
 
         indices = indices.to(self.qweight.device, non_blocking=True).long()
         lut = self._buffers[f'lut{w_bits}'].to(torch.float16)
-        return torch.gather(lut, 1, indices)
+        weight = torch.gather(lut, 1, indices).contiguous()
+
+        if use_cache:
+            self._dequant_weight_cache[cache_key] = weight
+
+        return weight
+
+    def cache_dequantized_weight(self, precision=None):
+        if precision is None:
+            precision = self.precision
+        self._dequant_weight_fallback(precision, use_cache=True)
+
+    def clear_dequantized_weight_cache(self):
+        self._dequant_weight_cache.clear()
 
     def prune_precisions(self):
         self.qweight = self.qweight[:max(self.precisions)]

@@ -13,6 +13,11 @@ from datasets import load_dataset
 current_dir = os.path.dirname(os.path.realpath(__file__))
 
 
+def _truthy_env(name, default="0"):
+    value = os.environ.get(name, default).lower()
+    return value in {"1", "true", "yes", "on"}
+
+
 def fake_pack(parent_path, verbose=True):
     # Load from non-packed parent model to simulate quantization
     # WARNING: This is for PPL research only, and should not be used for any other purpose
@@ -345,6 +350,9 @@ def evaluate_ppl(
         if is_anyprec:
             logprint(verbose, f"<<<< Setting model precision to {bit}-bit... >>>>")
             model.set_precision(bit)
+            if _truthy_env("GUIDEDQUANT_CACHE_DEQUANT"):
+                logprint(verbose, f"Caching {bit}-bit dense weights for fast fallback eval...")
+                model.cache_dequantized_weights(bit)
 
         for testcase_name in testcases:
             vprint(verbose, f"---------------------- {testcase_name} ----------------------")

@@ -5,6 +5,8 @@ set -x
 if [[ -n "${CUDA_DEVICE:-}" ]]; then
   export GUIDEDQUANT_CUDA_DEVICE="$CUDA_DEVICE"
 fi
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+export GUIDEDQUANT_CACHE_DEQUANT="${GUIDEDQUANT_CACHE_DEQUANT:-1}"
 
 MODEL_NAME="${MODEL_NAME:-meta-llama/Llama-3.1-8B}"
 MODEL_BASENAME="${MODEL_NAME##*/}"

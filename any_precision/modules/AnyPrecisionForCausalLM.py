@@ -182,6 +182,18 @@ class AnyPrecisionForCausalLM(nn.Module):
             ap_linear.set_precision(precision)
         self.precision = precision
 
+    def cache_dequantized_weights(self, precision=None):
+        if precision is None:
+            precision = self.precision
+        for ap_linear in tqdm(self.ap_linears, desc=f"Caching {precision}-bit dense weights"):
+            ap_linear.cache_dequantized_weight(precision)
+        torch.cuda.empty_cache()
+
+    def clear_dequantized_weight_cache(self):
+        for ap_linear in self.ap_linears:
+            ap_linear.clear_dequantized_weight_cache()
+        torch.cuda.empty_cache()
+
     def tie_weights(self):
         if hasattr(self.model, "tie_weights"):
             self.model.tie_weights()
