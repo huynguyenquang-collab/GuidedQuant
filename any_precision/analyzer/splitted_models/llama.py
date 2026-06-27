@@ -3,6 +3,13 @@ from transformers.models.llama.modeling_llama import LlamaModel
 from transformers.modeling_outputs import BaseModelOutputWithPast
 from typing import Optional, Union, List, Tuple
 
+try:
+    from transformers.cache_utils import DynamicCache
+    from transformers.masking_utils import create_causal_mask
+except ImportError:
+    DynamicCache = None
+    create_causal_mask = None
+
 class SplittedLlamaModel(LlamaModel):
 
     def set_devices(self):
@@ -66,9 +73,26 @@ class SplittedLlamaModel(LlamaModel):
         if position_ids is None:
             position_ids = cache_position.unsqueeze(0)
 
-        causal_mask = self._update_causal_mask(
-            attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
-        )
+        if hasattr(self, "_update_causal_mask"):
+            causal_mask = self._update_causal_mask(
+                attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
+            )
+            use_new_mask_api = False
+        else:
+            if create_causal_mask is None:
+                raise RuntimeError("This transformers version requires create_causal_mask, but it is not available.")
+            if use_cache and past_key_values is None:
+                if DynamicCache is None:
+                    raise RuntimeError("This transformers version requires DynamicCache, but it is not available.")
+                past_key_values = DynamicCache(config=self.config)
+            causal_mask = create_causal_mask(
+                config=self.config,
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                past_key_values=past_key_values,
+                position_ids=position_ids,
+            )
+            use_new_mask_api = True
         hidden_states = inputs_embeds
 
         # create position embeddings to be shared across the decoder layers
@@ -92,6 +116,10 @@ class SplittedLlamaModel(LlamaModel):
                 for position_embedding in position_embeddings:
                     new_position_embeddings.append(position_embedding.to(f"cuda:{device}"))
                 position_embeddings = tuple(new_position_embeddings)
+                if causal_mask is not None:
+                    causal_mask = causal_mask.to(f"cuda:{device}")
+                position_ids = position_ids.to(f"cuda:{device}")
+                cache_position = cache_position.to(f"cuda:{device}")
 
             if self.gradient_checkpointing and self.training:
                 layer_outputs = self._gradient_checkpointing_func(
@@ -104,6 +132,18 @@ class SplittedLlamaModel(LlamaModel):
                     use_cache,
                     cache_position,
                     position_embeddings,
+                )
+            elif use_new_mask_api:
+                layer_outputs = decoder_layer(
+                    hidden_states,
+                    attention_mask=causal_mask,
+                    position_ids=position_ids,
+                    past_key_values=past_key_values,
+                    output_attentions=output_attentions,
+                    use_cache=use_cache,
+                    cache_position=cache_position,
+                    position_embeddings=position_embeddings,
+                    **flash_attn_kwargs,
                 )
             else:
                 layer_outputs = decoder_layer(
@@ -118,7 +158,7 @@ class SplittedLlamaModel(LlamaModel):
                     **flash_attn_kwargs,
                 )
 
-            hidden_states = layer_outputs[0]
+            hidden_states = layer_outputs[0] if isinstance(layer_outputs, tuple) else layer_outputs
 
             # Move activations back to the 1st device at the end
             if self.split_gpus and idx == len(self.layers) - 1:
@@ -127,11 +167,15 @@ class SplittedLlamaModel(LlamaModel):
                 for position_embedding in position_embeddings:
                     new_position_embeddings.append(position_embedding.to(f"cuda:0"))
                 position_embeddings = tuple(new_position_embeddings)
+                if causal_mask is not None:
+                    causal_mask = causal_mask.to("cuda:0")
+                position_ids = position_ids.to("cuda:0")
+                cache_position = cache_position.to("cuda:0")
 
-            if use_cache:
+            if use_cache and isinstance(layer_outputs, tuple):
                 next_decoder_cache = layer_outputs[2 if output_attentions else 1]
 
-            if output_attentions:
+            if output_attentions and isinstance(layer_outputs, tuple):
                 all_self_attns += (layer_outputs[1],)
 
         hidden_states = self.norm(hidden_states)
@@ -140,7 +184,7 @@ class SplittedLlamaModel(LlamaModel):
         if output_hidden_states:
             all_hidden_states += (hidden_states,)
 
-        next_cache = next_decoder_cache if use_cache else None
+        next_cache = past_key_values if use_cache and use_new_mask_api else next_decoder_cache if use_cache else None
 
         if not return_dict:
             return tuple(v for v in [hidden_states, next_cache, all_hidden_states, all_self_attns] if v is not None)
