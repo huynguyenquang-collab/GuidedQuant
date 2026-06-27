@@ -1,6 +1,6 @@
 import torch
 from transformers import AutoModelForCausalLM, PreTrainedModel, AutoTokenizer, PreTrainedTokenizerBase
-from .splitted_models import SplittedLlamaModel, SplittedQwen3Model, SplittedGemma3TextModel
+from .splitted_models import SplittedLlamaModel
 
 
 def load_model(model_str_or_model, dtype=torch.float16):
@@ -30,12 +30,16 @@ def dispatch_model(model):
         model.lm_head.to("cuda:0")
         return model
     elif model.config.architectures[0] == 'Qwen3ForCausalLM':
+        from .splitted_models.qwen3 import SplittedQwen3Model
+
         model.model.__class__ = SplittedQwen3Model
         model.model.config.use_cache = False
         model.model.set_devices()
         model.lm_head.to("cuda:0")
         return model
     elif model.config.architectures[0] == 'Gemma3ForConditionalGeneration':
+        from .splitted_models.gemma3 import SplittedGemma3TextModel
+
         model.to("cuda:0")
         model.model.language_model.__class__ = SplittedGemma3TextModel
         model.model.language_model.config.use_cache = False
