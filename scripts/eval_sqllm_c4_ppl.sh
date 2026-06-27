@@ -3,7 +3,7 @@ set -euo pipefail
 set -x
 
 if [[ -n "${CUDA_DEVICE:-}" ]]; then
-  export CUDA_VISIBLE_DEVICES="$CUDA_DEVICE"
+  export GUIDEDQUANT_CUDA_DEVICE="$CUDA_DEVICE"
 fi
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 

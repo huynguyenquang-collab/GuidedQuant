@@ -76,6 +76,7 @@ def get_gradients(
     forced_device = os.environ.get("GUIDEDQUANT_CUDA_DEVICE")
     if torch.cuda.is_available():
         logging.info(f"CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES')}")
+        logging.info(f"GUIDEDQUANT_CUDA_DEVICE={forced_device}")
         for device_idx in range(torch.cuda.device_count()):
             logging.info(f"Logical cuda:{device_idx} -> {torch.cuda.get_device_name(device_idx)}")
 
