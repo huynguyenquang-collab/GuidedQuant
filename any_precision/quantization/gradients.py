@@ -56,8 +56,13 @@ def get_gradients(
     # ----------------------------------------------------------------
     # 2) Prepare model
     # ----------------------------------------------------------------
+    forced_device = os.environ.get("GUIDEDQUANT_CUDA_DEVICE")
+    if forced_device is not None:
+        torch.cuda.set_device(int(forced_device))
+        logging.info(f"Pinning gradient calculation to {get_target_cuda_device()}")
+
     model = analyzer.model
-    if torch.cuda.device_count() > 1 or os.environ.get("GUIDEDQUANT_CUDA_DEVICE") is not None:
+    if torch.cuda.device_count() > 1 or forced_device is not None:
         model = dispatch_model(model)
 
     model = model.bfloat16()
@@ -140,8 +145,9 @@ def get_gradients(
     # ----------------------------------------------------------------
     # 5) Forward/backward pass over data
     # ----------------------------------------------------------------
+    input_device = torch.device(get_target_cuda_device()) if forced_device is not None else model.device
     for tokens in tqdm(input_tokens, desc="Calculating gradients"):
-        tokens = tokens.to(model.device).unsqueeze(0)
+        tokens = tokens.to(input_device).unsqueeze(0)
         outputs = model(input_ids=tokens, labels=tokens)
         loss = outputs.loss
         loss.backward()

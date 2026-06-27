@@ -2,6 +2,10 @@
 set -euo pipefail
 set -x
 
+if [[ -n "${CUDA_DEVICE:-}" ]]; then
+  export CUDA_VISIBLE_DEVICES="$CUDA_DEVICE"
+fi
+
 MODEL_NAME="${MODEL_NAME:-meta-llama/Llama-3.1-8B}"
 MODEL_BASENAME="${MODEL_NAME##*/}"
 BITS="${BITS:-4}"

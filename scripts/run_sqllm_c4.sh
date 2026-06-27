@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -x
 
+if [[ -n "${CUDA_DEVICE:-}" ]]; then
+  export CUDA_VISIBLE_DEVICES="$CUDA_DEVICE"
+fi
+
 MODEL_NAME=${1:-meta-llama/Llama-3.1-8B}
 BITS=${2:-4}
 
