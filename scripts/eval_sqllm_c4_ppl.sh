@@ -5,11 +5,14 @@ set -x
 if [[ -n "${CUDA_DEVICE:-}" ]]; then
   export CUDA_VISIBLE_DEVICES="$CUDA_DEVICE"
 fi
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 MODEL_NAME="${MODEL_NAME:-meta-llama/Llama-3.1-8B}"
 MODEL_BASENAME="${MODEL_NAME##*/}"
 BITS="${BITS:-4}"
-MODEL_PATH="${MODEL_PATH:-cache/packed/anyprec-${MODEL_BASENAME}-w${BITS}_orig${BITS}-c4_s1024_blk4096}"
+SEQ_LEN="${SEQ_LEN:-4096}"
+NUM_EXAMPLES="${NUM_EXAMPLES:-1024}"
+MODEL_PATH="${MODEL_PATH:-cache/packed/anyprec-${MODEL_BASENAME}-w${BITS}_orig${BITS}-c4_s${NUM_EXAMPLES}_blk${SEQ_LEN}}"
 OUTPUT_FILE="${OUTPUT_FILE:-results_sqllm_c4_ppl_${MODEL_BASENAME}_${BITS}bit.json}"
 CHUNK_SIZE="${CHUNK_SIZE:-2048}"
 

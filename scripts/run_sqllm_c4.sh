@@ -4,9 +4,12 @@ set -x
 if [[ -n "${CUDA_DEVICE:-}" ]]; then
   export CUDA_VISIBLE_DEVICES="$CUDA_DEVICE"
 fi
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 MODEL_NAME=${1:-meta-llama/Llama-3.1-8B}
 BITS=${2:-4}
+SEQ_LEN="${SEQ_LEN:-4096}"
+NUM_EXAMPLES="${NUM_EXAMPLES:-1024}"
 
 NUM_GROUPS_OPT=""
 MODE_OPT=""
@@ -21,5 +24,5 @@ fi
 
 python quantize.py "$MODEL_NAME" \
   --seed_precision "$BITS" --parent_precision "$BITS" \
-  --dataset c4 --seq_len 4096 --num_examples 1024 \
+  --dataset c4 --seq_len "$SEQ_LEN" --num_examples "$NUM_EXAMPLES" \
   $NUM_GROUPS_OPT $MODE_OPT

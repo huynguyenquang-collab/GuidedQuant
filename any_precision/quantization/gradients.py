@@ -1,11 +1,28 @@
 import os
 import torch
+import torch.nn.functional as F
 from tqdm import tqdm
 import logging
 from typing import Optional, Tuple
 from .config import *
 from any_precision.analyzer import dispatch_model
 from any_precision.analyzer.utils import get_target_cuda_device
+
+
+def _chunked_causal_lm_loss(logits, labels, chunk_size):
+    shift_logits = logits[:, :-1, :]
+    shift_labels = labels[:, 1:]
+    vocab_size = shift_logits.shape[-1]
+    token_count = shift_labels.numel()
+    loss = shift_logits.new_zeros(())
+
+    for start in range(0, shift_labels.shape[1], chunk_size):
+        end = min(start + chunk_size, shift_labels.shape[1])
+        chunk_logits = shift_logits[:, start:end, :].reshape(-1, vocab_size)
+        chunk_labels = shift_labels[:, start:end].reshape(-1)
+        loss = loss + F.cross_entropy(chunk_logits, chunk_labels, reduction="sum")
+
+    return loss / token_count
 
 
 def get_gradients(
@@ -57,6 +74,11 @@ def get_gradients(
     # 2) Prepare model
     # ----------------------------------------------------------------
     forced_device = os.environ.get("GUIDEDQUANT_CUDA_DEVICE")
+    if torch.cuda.is_available():
+        logging.info(f"CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES')}")
+        for device_idx in range(torch.cuda.device_count()):
+            logging.info(f"Logical cuda:{device_idx} -> {torch.cuda.get_device_name(device_idx)}")
+
     if forced_device is not None:
         torch.cuda.set_device(int(forced_device))
         logging.info(f"Pinning gradient calculation to {get_target_cuda_device()}")
@@ -146,10 +168,15 @@ def get_gradients(
     # 5) Forward/backward pass over data
     # ----------------------------------------------------------------
     input_device = torch.device(get_target_cuda_device()) if forced_device is not None else model.device
+    loss_chunk_size = int(os.environ.get("GUIDEDQUANT_LOSS_CHUNK_SIZE", "512"))
     for tokens in tqdm(input_tokens, desc="Calculating gradients"):
         tokens = tokens.to(input_device).unsqueeze(0)
-        outputs = model(input_ids=tokens, labels=tokens)
-        loss = outputs.loss
+        if loss_chunk_size > 0:
+            outputs = model(input_ids=tokens, use_cache=False)
+            loss = _chunked_causal_lm_loss(outputs.logits, tokens, loss_chunk_size)
+        else:
+            outputs = model(input_ids=tokens, labels=tokens)
+            loss = outputs.loss
         loss.backward()
 
     # ----------------------------------------------------------------
