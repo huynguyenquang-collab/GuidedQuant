@@ -18,8 +18,6 @@ class AnyPrecisionLinear(nn.Module):
     def __init__(self, in_features, out_features, supported_bits, bias=True, precisions=None, device=None,
                  dtype=None):
         super().__init__()
-        if ap_gemv is None:
-            raise ModuleNotFoundError("ap_gemv is not installed. Please install `ap_gemv` kernel.")
         if precisions is None:
             precisions = supported_bits
         if not isinstance(precisions, list):
@@ -55,6 +53,18 @@ class AnyPrecisionLinear(nn.Module):
         output_device = device if device is not None else 'cuda'
         self.output = torch.zeros((1, 1, self.out_features), dtype=torch.float16, device=output_device)
 
+    def _dequant_weight_fallback(self, w_bits):
+        from any_precision.quantization.pack import unpack_single_weight
+
+        parent_precision = self.qweight.shape[0]
+        indices = unpack_single_weight(self.qweight.detach().cpu(), parent_precision).squeeze(1)
+        if parent_precision != w_bits:
+            indices = indices >> (parent_precision - w_bits)
+
+        indices = indices.to(self.qweight.device, non_blocking=True).long()
+        lut = self._buffers[f'lut{w_bits}'].to(torch.float16)
+        return torch.gather(lut, 1, indices)
+
     def prune_precisions(self):
         self.qweight = self.qweight[:max(self.precisions)]
         for bit in self.supported_bits:
@@ -67,7 +77,10 @@ class AnyPrecisionLinear(nn.Module):
         else:
             w_bits = self.precision
 
-        if x.numel() // x.shape[-1] > 1:
+        if ap_gemv is None:
+            weight = self._dequant_weight_fallback(w_bits).to(x.dtype)
+            x = torch.matmul(x, weight.T)
+        elif x.numel() // x.shape[-1] > 1:
             weight = ap_gemv.anyprec_dequant(self.qweight, self._buffers[f'lut{w_bits}'].to(torch.float16), w_bits).to(x.dtype)
             x = torch.matmul(x, weight.T)
         else:
