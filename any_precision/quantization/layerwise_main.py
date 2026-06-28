@@ -6,7 +6,7 @@ import logging
 
 from .config import *
 from ..analyzer import get_analyzer
-from .activations import accumulate_saliency_weighted_hessians
+from .activations import accumulate_hessians, accumulate_saliency_weighted_hessians
 from .layerwise_quantize import seed
 from .pack import pack
 from .datautils import get_tokens
@@ -139,7 +139,11 @@ def layerwise_nuq(
     # ------------------- Get Hessians -------------------
     logging.info("------------------- Get Hessians -------------------")
     logging.info(f"Getting Hessians for {dataset} with sequence length {seq_len} and {num_examples} examples")
-    from_cache = accumulate_saliency_weighted_hessians(analyzer, tokens, saliency_cache_path, hessians_cache_path, num_groups)
+    if is_nosal:
+        logging.info("Using ordinary LNQ Hessian X^T X without GuidedQuant saliency")
+        from_cache = accumulate_hessians(analyzer, tokens, hessians_cache_path)
+    else:
+        from_cache = accumulate_saliency_weighted_hessians(analyzer, tokens, saliency_cache_path, hessians_cache_path, num_groups)
     logging.info("Hessians loading complete.")
 
     if mode == 'hessians':

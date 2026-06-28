@@ -257,6 +257,39 @@ class _LayerWrapperThatAccumulatesSaliency(nn.Module):
         self.engine.add_batch(input)
         return self.wrapped_layer(input, *args, **kwargs)
 
+
+class HessianEngine(nn.Module):
+    """
+    Accumulates the ordinary layer-wise output-error Hessian X^T X for one sub-layer.
+    """
+    def __init__(
+        self,
+        in_features: int,
+        dtype: torch.dtype = torch.float32,
+        device: torch.device = torch.device("cuda"),
+    ):
+        super().__init__()
+        self.device = device
+        self.nsamples = 0
+        self.register_buffer(
+            "XTX",
+            torch.zeros(in_features, in_features, 1, dtype=dtype, device=self.device),
+        )
+
+    @torch.no_grad()
+    def add_batch(self, X: torch.Tensor):
+        self.nsamples += X.shape[0]
+        if X.dim() == 3:
+            X = X.reshape(-1, X.shape[-1])
+
+        X = X.to(self.XTX.dtype)
+        block = torch.einsum("ni,nj->ij", X, X).unsqueeze(-1)
+        if torch.isnan(block).any():
+            raise ValueError(f"batch {self.nsamples} XTX is nan")
+        self.XTX.add_(block)
+        if torch.isnan(self.XTX).any():
+            raise ValueError(f"batch {self.nsamples} XTX is nan")
+
 def print_gpu_usage(message: str):
     import torch
     allocated_memory = torch.cuda.memory_allocated()
@@ -386,9 +419,216 @@ def init_saliency_engines_parallel_wrapper(
 
     return main_engines
 
+
+def init_hessian_engines_single_wrapper(
+    layer: nn.Module,
+    sublayer_names: List[str],
+    inp: torch.Tensor,
+    **forward_args,
+) -> Dict[str, HessianEngine]:
+    device = torch.device(f"cuda:{torch.cuda.current_device()}" if torch.cuda.is_available() else "cpu")
+    layer = layer.to(device)
+
+    found_sublayers = _find_sublayers(layer)
+    sublayers = {nm: found_sublayers[nm] for nm in sublayer_names if nm in found_sublayers}
+
+    engines = {}
+    for nm, submodule in sublayers.items():
+        engines[nm] = HessianEngine(submodule.weight.shape[1], dtype=torch.float32, device=device)
+
+    _wrap_sublayers(layer, engines)
+
+    processed_args = {}
+    for k, v in forward_args.items():
+        if isinstance(v, torch.Tensor):
+            processed_args[k] = v.to(device, non_blocking=True)
+        elif isinstance(v, tuple) and all(isinstance(x, torch.Tensor) for x in v):
+            processed_args[k] = tuple(x.to(device, non_blocking=True) for x in v)
+        else:
+            processed_args[k] = v
+    forward_args = processed_args
+
+    with torch.no_grad():
+        for i in trange(len(inp), desc="capturing XTX", leave=False):
+            local_inp = inp[i].to(device).unsqueeze(0)
+            layer(local_inp, **forward_args)[0]
+
+    _unwrap_sublayers(layer)
+
+    return engines
+
+
+def init_hessian_engines_parallel_wrapper(
+    devices: Sequence[torch.device],
+    layer: nn.Module,
+    sublayer_names: List[str],
+    inps: Sequence[torch.Tensor],
+    **forward_args,
+) -> Dict[str, HessianEngine]:
+    from torch.nn.parallel import replicate, parallel_apply
+
+    layer.to(devices[0])
+    layer_replicas = replicate(layer, devices=devices, detach=True)
+    layer_replicas[0] = layer
+
+    funcs = [init_hessian_engines_single_wrapper for _ in devices]
+    inputs_by_device = []
+    kwargs_by_device = []
+
+    for i, dev in enumerate(devices):
+        inputs_by_device.append((layer_replicas[i], sublayer_names, inps[i]))
+        dev_kwargs = {}
+        for k, v in forward_args.items():
+            if isinstance(v, torch.Tensor):
+                dev_kwargs[k] = v.to(dev, non_blocking=True)
+            elif isinstance(v, tuple) and all(isinstance(x, torch.Tensor) for x in v):
+                dev_kwargs[k] = tuple(x.to(dev, non_blocking=True) for x in v)
+            else:
+                dev_kwargs[k] = v
+        kwargs_by_device.append(dev_kwargs)
+
+    partial_results: List[Dict[str, HessianEngine]] = parallel_apply(
+        funcs, inputs_by_device, kwargs_by_device, devices=devices
+    )
+
+    main_engines = partial_results[0]
+    for nm, main_engine in main_engines.items():
+        total_nsamples = main_engine.nsamples
+        for i in range(1, len(devices)):
+            eng_i = partial_results[i][nm]
+            main_engine.XTX.add_(eng_i.XTX.to(main_engine.device))
+            total_nsamples += eng_i.nsamples
+        main_engine.nsamples = total_nsamples
+
+    return main_engines
+
+
 ##############################################################################
 # 4) Updated "accumulate_saliency_weighted_hessians" using saliency_path
 ##############################################################################
+
+def accumulate_hessians(
+    analyzer,
+    data: List[torch.Tensor],
+    output_folder: str,
+) -> bool:
+    """
+    Accumulate the ordinary LNQ Hessian X^T X for each quantized sub-layer.
+
+    Returns True if all Hessians were already cached, False otherwise.
+    """
+
+    if output_folder and os.path.exists(output_folder):
+        if all(os.path.exists(os.path.join(output_folder, f"l{i}.pt"))
+                for i in range(len(analyzer.get_layers()))):
+            logging.info(f"Cached hessians found in {output_folder}")
+            return True
+
+    if torch.cuda.is_available():
+        devices = [torch.device(f"cuda:{i}") for i in range(torch.cuda.device_count())]
+    else:
+        devices = [torch.device("cpu")]
+
+    model_seqlen = data[0].shape[-1]
+    if data[0].dim() == 1:
+        data = [d.unsqueeze(0) for d in data]
+
+    os.makedirs(output_folder, exist_ok=True)
+
+    inps, forward_args = get_inps(
+        analyzer=analyzer,
+        data=data,
+        model_seqlen=model_seqlen,
+        devices=devices,
+        offload_activations=True,
+    )
+
+    outs = [torch.zeros_like(inp_tensor) for inp_tensor in inps]
+    layers = analyzer.get_layers()
+    num_layers = len(layers)
+
+    processed_layers = []
+    for l in range(num_layers):
+        if os.path.exists(os.path.join(output_folder, f"l{l}.pt")):
+            processed_layers.append(l)
+
+    logging.info(f"Processed layers: {processed_layers}")
+
+    module_names = analyzer.module_names
+    from .utils import get_progress_bar
+    pb = get_progress_bar(num_layers, "Accumulating Hessians blockwise")
+
+    for l in range(num_layers):
+        layer = layers[l]
+        layer.to(torch.device("cpu"))
+
+        if l in processed_layers:
+            logging.info(f"Skipping layer {l} because it has already been processed")
+            torch.cuda.empty_cache()
+            update_outs_parallel(
+                devices=devices,
+                layer=layer,
+                inps=inps,
+                outs=outs,
+                compute_mse=False,
+                is_after_quant=False,
+                **forward_args
+            )
+            layer.to(torch.device("cpu"))
+            inps, outs = outs, inps
+            torch.cuda.empty_cache()
+            layers[l] = None
+            pb.update(1)
+            continue
+
+        if len(devices) == 1:
+            hessian_handlers = init_hessian_engines_single_wrapper(
+                layer,
+                module_names,
+                inps[0],
+                **forward_args
+            )
+        else:
+            hessian_handlers = init_hessian_engines_parallel_wrapper(
+                devices,
+                layer,
+                module_names,
+                inps,
+                **forward_args
+            )
+
+        result_dict = {}
+        for nm, engine in hessian_handlers.items():
+            result_dict[nm] = engine.XTX.detach().cpu().float()
+
+        out_file = os.path.join(output_folder, f"l{l}.pt")
+        torch.save(result_dict, out_file)
+        logging.info(f"[Layer {l}] Saved Hessians to {out_file}")
+
+        del result_dict
+        import gc; gc.collect()
+        del hessian_handlers
+        torch.cuda.empty_cache()
+
+        update_outs_parallel(
+            devices=devices,
+            layer=layer,
+            inps=inps,
+            outs=outs,
+            compute_mse=False,
+            is_after_quant=False,
+            **forward_args
+        )
+
+        layer.to(torch.device("cpu"))
+        inps, outs = outs, inps
+        torch.cuda.empty_cache()
+        layers[l] = None
+        pb.update(1)
+
+    pb.close()
+    logging.info("Done accumulating Hessians for all layers.")
+    return False
 
 def accumulate_saliency_weighted_hessians(
     analyzer,

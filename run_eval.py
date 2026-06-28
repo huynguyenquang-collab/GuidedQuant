@@ -1,6 +1,8 @@
 import os
 import json
 import argparse
+import gc
+import torch
 
 from any_precision.evaluate.helpers import utils
 from any_precision.evaluate import eval
@@ -134,6 +136,16 @@ def save_results(results_dict):
         json.dump(sorted_results, f, indent=2)
 
 
+def cleanup_model_memory():
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        try:
+            torch.cuda.ipc_collect()
+        except RuntimeError:
+            pass
+
+
 # Run all tasks
 for i, model_path in enumerate(total_tests_to_run):
     model_name = os.path.basename(model_path)
@@ -180,7 +192,9 @@ for i, model_path in enumerate(total_tests_to_run):
 
     print()
 
-    del model  # clear memory
+    del model
+    del tokenizer
+    cleanup_model_memory()
 
 print("---------------------- All Results ----------------------")
 # print new results as formatted json
