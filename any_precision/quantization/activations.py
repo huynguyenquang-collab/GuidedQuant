@@ -257,6 +257,39 @@ class _LayerWrapperThatAccumulatesSaliency(nn.Module):
         self.engine.add_batch(input)
         return self.wrapped_layer(input, *args, **kwargs)
 
+
+class HessianEngine(nn.Module):
+    """
+    Accumulates the ordinary layer-wise output-error Hessian X^T X for one sub-layer.
+    """
+    def __init__(
+        self,
+        in_features: int,
+        dtype: torch.dtype = torch.float32,
+        device: torch.device = torch.device("cuda"),
+    ):
+        super().__init__()
+        self.device = device
+        self.nsamples = 0
+        self.register_buffer(
+            "XTX",
+            torch.zeros(in_features, in_features, 1, dtype=dtype, device=self.device),
+        )
+
+    @torch.no_grad()
+    def add_batch(self, X: torch.Tensor):
+        self.nsamples += X.shape[0]
+        if X.dim() == 3:
+            X = X.reshape(-1, X.shape[-1])
+
+        X = X.to(self.XTX.dtype)
+        block = torch.einsum("ni,nj->ij", X, X).unsqueeze(-1)
+        if torch.isnan(block).any():
+            raise ValueError(f"batch {self.nsamples} XTX is nan")
+        self.XTX.add_(block)
+        if torch.isnan(self.XTX).any():
+            raise ValueError(f"batch {self.nsamples} XTX is nan")
+
 def print_gpu_usage(message: str):
     import torch
     allocated_memory = torch.cuda.memory_allocated()
@@ -385,6 +418,90 @@ def init_saliency_engines_parallel_wrapper(
         main_engine.nsamples = total_nsamples
 
     return main_engines
+
+
+def init_hessian_engines_single_wrapper(
+    layer: nn.Module,
+    sublayer_names: List[str],
+    inp: torch.Tensor,
+    **forward_args,
+) -> Dict[str, HessianEngine]:
+    device = torch.device(f"cuda:{torch.cuda.current_device()}" if torch.cuda.is_available() else "cpu")
+    layer = layer.to(device)
+
+    found_sublayers = _find_sublayers(layer)
+    sublayers = {nm: found_sublayers[nm] for nm in sublayer_names if nm in found_sublayers}
+
+    engines = {}
+    for nm, submodule in sublayers.items():
+        engines[nm] = HessianEngine(submodule.weight.shape[1], dtype=torch.float32, device=device)
+
+    _wrap_sublayers(layer, engines)
+
+    processed_args = {}
+    for k, v in forward_args.items():
+        if isinstance(v, torch.Tensor):
+            processed_args[k] = v.to(device, non_blocking=True)
+        elif isinstance(v, tuple) and all(isinstance(x, torch.Tensor) for x in v):
+            processed_args[k] = tuple(x.to(device, non_blocking=True) for x in v)
+        else:
+            processed_args[k] = v
+    forward_args = processed_args
+
+    with torch.no_grad():
+        for i in trange(len(inp), desc="capturing XTX", leave=False):
+            local_inp = inp[i].to(device).unsqueeze(0)
+            layer(local_inp, **forward_args)[0]
+
+    _unwrap_sublayers(layer)
+
+    return engines
+
+
+def init_hessian_engines_parallel_wrapper(
+    devices: Sequence[torch.device],
+    layer: nn.Module,
+    sublayer_names: List[str],
+    inps: Sequence[torch.Tensor],
+    **forward_args,
+) -> Dict[str, HessianEngine]:
+    from torch.nn.parallel import replicate, parallel_apply
+
+    layer.to(devices[0])
+    layer_replicas = replicate(layer, devices=devices, detach=True)
+    layer_replicas[0] = layer
+
+    funcs = [init_hessian_engines_single_wrapper for _ in devices]
+    inputs_by_device = []
+    kwargs_by_device = []
+
+    for i, dev in enumerate(devices):
+        inputs_by_device.append((layer_replicas[i], sublayer_names, inps[i]))
+        dev_kwargs = {}
+        for k, v in forward_args.items():
+            if isinstance(v, torch.Tensor):
+                dev_kwargs[k] = v.to(dev, non_blocking=True)
+            elif isinstance(v, tuple) and all(isinstance(x, torch.Tensor) for x in v):
+                dev_kwargs[k] = tuple(x.to(dev, non_blocking=True) for x in v)
+            else:
+                dev_kwargs[k] = v
+        kwargs_by_device.append(dev_kwargs)
+
+    partial_results: List[Dict[str, HessianEngine]] = parallel_apply(
+        funcs, inputs_by_device, kwargs_by_device, devices=devices
+    )
+
+    main_engines = partial_results[0]
+    for nm, main_engine in main_engines.items():
+        total_nsamples = main_engine.nsamples
+        for i in range(1, len(devices)):
+            eng_i = partial_results[i][nm]
+            main_engine.XTX.add_(eng_i.XTX.to(main_engine.device))
+            total_nsamples += eng_i.nsamples
+        main_engine.nsamples = total_nsamples
+
+    return main_engines
+
 
 ##############################################################################
 # 4) Updated "accumulate_saliency_weighted_hessians" using saliency_path
