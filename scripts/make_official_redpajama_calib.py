@@ -43,6 +43,7 @@ def redpajama_features(dataset_name, config_name):
                     "language": Value("string"),
                     "source": Value("string"),
                 },
+                "red_pajama_subset": Value("string"),
             }
         )
 
