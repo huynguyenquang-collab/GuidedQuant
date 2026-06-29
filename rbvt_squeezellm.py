@@ -114,6 +114,34 @@ def collect_activation_stats(analyzer, tokens: torch.Tensor, n_calib: int, batch
     return collector.means_vars()
 
 
+def normalize_tokens(tokens, seq_len: int) -> torch.Tensor:
+    if isinstance(tokens, torch.Tensor):
+        if tokens.ndim == 2:
+            return tokens.long()
+        if tokens.ndim == 3 and tokens.shape[1] == 1:
+            return tokens[:, 0, :].long()
+        raise ValueError(f"Expected token tensor with shape [n, seq] or [n, 1, seq], got {tuple(tokens.shape)}")
+
+    if isinstance(tokens, (list, tuple)):
+        normalized = []
+        for item in tokens:
+            if not isinstance(item, torch.Tensor):
+                raise TypeError(f"Expected tensor token item, got {type(item).__name__}")
+            item = item.detach().cpu()
+            if item.ndim == 2 and item.shape[0] == 1:
+                item = item[0]
+            if item.ndim != 1:
+                raise ValueError(f"Expected token item with shape [seq] or [1, seq], got {tuple(item.shape)}")
+            if item.numel() != seq_len:
+                raise ValueError(f"Expected token length {seq_len}, got {item.numel()}")
+            normalized.append(item.long())
+        if not normalized:
+            raise ValueError("Token list is empty")
+        return torch.stack(normalized, dim=0)
+
+    raise TypeError(f"Unsupported token cache type: {type(tokens).__name__}")
+
+
 def _dequantize(indices: torch.Tensor, luts: torch.Tensor) -> torch.Tensor:
     # indices: [rows, 1, cols], luts: [rows, 1, levels]
     row_ids = torch.arange(indices.shape[0], device=indices.device).view(-1, 1)
@@ -355,9 +383,8 @@ def main():
 
     logging.info("Loading model/analyzer: %s", args.model)
     analyzer = get_analyzer(args.model, include_tokenizer=True)
-    tokens = torch.load(args.tokens_path, map_location="cpu")
-    if tokens.ndim != 2:
-        raise ValueError(f"Expected tokens with shape [n, seq], got {tuple(tokens.shape)}")
+    tokens = normalize_tokens(torch.load(args.tokens_path, map_location="cpu"), args.seq_len)
+    logging.info("Loaded calibration tokens: shape=%s", tuple(tokens.shape))
 
     means, variances = collect_activation_stats(
         analyzer=analyzer,
