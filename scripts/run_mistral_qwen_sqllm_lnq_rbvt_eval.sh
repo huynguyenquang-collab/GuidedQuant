@@ -46,12 +46,12 @@ RUN_REPO_EVAL="${RUN_REPO_EVAL:-1}"
 RUN_NONUQ_EVAL="${RUN_NONUQ_EVAL:-1}"
 OVERWRITE_RBVT_STATS="${OVERWRITE_RBVT_STATS:-1}"
 
-# If no model-specific calibration token exists locally and no official token URL is
-# configured, build a reproducible cache from the official RedPajama-Data-1T.
-# Do not use the "default" config here: it can hit schema-casting failures on
-# mixed metadata. The c4 config has a stable text field and works with streaming.
-OFFICIAL_REDPJ_DATASET="${OFFICIAL_REDPJ_DATASET:-togethercomputer/RedPajama-Data-1T}"
-OFFICIAL_REDPJ_CONFIG="${OFFICIAL_REDPJ_CONFIG:-c4}"
+# If no model-specific calibration token exists locally and no official token URL
+# is configured, build a reproducible cache from a RedPajama sample dataset.
+# Default to the mirror because the official Data-1T loader has unstable metadata
+# schemas across shards. Override these vars to use the official dataset again.
+OFFICIAL_REDPJ_DATASET="${OFFICIAL_REDPJ_DATASET:-ZengXiangyu/RedPajama-Data-1T-Sample}"
+OFFICIAL_REDPJ_CONFIG="${OFFICIAL_REDPJ_CONFIG:-}"
 OFFICIAL_REDPJ_SPLIT="${OFFICIAL_REDPJ_SPLIT:-train}"
 OFFICIAL_REDPJ_TEXT_FIELD="${OFFICIAL_REDPJ_TEXT_FIELD:-text}"
 OFFICIAL_REDPJ_RANDOM_STATE="${OFFICIAL_REDPJ_RANDOM_STATE:-0}"
@@ -124,7 +124,7 @@ PY
 }
 
 calibration_source_string() {
-  printf 'official_redpajama dataset=%s config=%s split=%s text_field=%s seed=%s shuffle_buffer=%s seq_len=%s num_examples=%s\n' \
+  printf 'redpajama_calib dataset=%s config=%s split=%s text_field=%s seed=%s shuffle_buffer=%s seq_len=%s num_examples=%s\n' \
     "${OFFICIAL_REDPJ_DATASET}" \
     "${OFFICIAL_REDPJ_CONFIG}" \
     "${OFFICIAL_REDPJ_SPLIT}" \
@@ -164,18 +164,23 @@ build_official_redpajama_calibration() {
   local model_name="$1"
   local token_path="$2"
 
-  log "Building calibration tokens from official ${OFFICIAL_REDPJ_DATASET}/${OFFICIAL_REDPJ_CONFIG}"
-  "${PYTHON_BIN}" scripts/make_official_redpajama_calib.py \
+  log "Building calibration tokens from ${OFFICIAL_REDPJ_DATASET}${OFFICIAL_REDPJ_CONFIG:+/${OFFICIAL_REDPJ_CONFIG}}"
+  local calib_args=(
+    scripts/make_official_redpajama_calib.py
     --model "${model_name}" \
     --output "${token_path}" \
     --seq-len "${SEQ_LEN}" \
     --num-examples "${NUM_EXAMPLES}" \
     --dataset "${OFFICIAL_REDPJ_DATASET}" \
-    --config "${OFFICIAL_REDPJ_CONFIG}" \
     --split "${OFFICIAL_REDPJ_SPLIT}" \
     --text-field "${OFFICIAL_REDPJ_TEXT_FIELD}" \
     --seed "${OFFICIAL_REDPJ_RANDOM_STATE}" \
     --shuffle-buffer "${OFFICIAL_REDPJ_SHUFFLE_BUFFER}"
+  )
+  if [[ -n "${OFFICIAL_REDPJ_CONFIG}" ]]; then
+    calib_args+=(--config "${OFFICIAL_REDPJ_CONFIG}")
+  fi
+  "${PYTHON_BIN}" "${calib_args[@]}"
   calibration_source_string > "${token_path}.source"
 }
 
@@ -186,7 +191,7 @@ ensure_calibration() {
   local token_url
 
   if calibration_source_matches "${token_path}"; then
-    log "Using existing official RedPajama calibration tokens: ${token_path}"
+    log "Using existing RedPajama calibration tokens: ${token_path}"
     return
   fi
 
@@ -196,7 +201,7 @@ ensure_calibration() {
   fi
 
   if [[ -s "${token_path}" ]]; then
-    log "Existing calibration cache lacks matching official source marker; rebuilding: ${token_path}"
+    log "Existing calibration cache lacks matching source marker; rebuilding: ${token_path}"
     rm -f "${token_path}" "${token_path}.source"
   fi
 
@@ -443,8 +448,8 @@ run_model_job() {
 
 main() {
   log "Models: ${MODELS}"
-  log "Config: bits=${BITS}, official RedPajama ${NUM_EXAMPLES}x${SEQ_LEN}, LNQ g=${LNQ_NUM_GROUPS} iter=${LNQ_NUM_ITERATIONS} cd=${LNQ_CD_CYCLES}, repo_eval_ctx=${REPO_EVAL_CONTEXT}"
-  log "Official RedPajama source: ${OFFICIAL_REDPJ_DATASET}/${OFFICIAL_REDPJ_CONFIG}, split=${OFFICIAL_REDPJ_SPLIT}, streaming shuffle buffer=${OFFICIAL_REDPJ_SHUFFLE_BUFFER}"
+  log "Config: bits=${BITS}, RedPajama ${NUM_EXAMPLES}x${SEQ_LEN}, LNQ g=${LNQ_NUM_GROUPS} iter=${LNQ_NUM_ITERATIONS} cd=${LNQ_CD_CYCLES}, repo_eval_ctx=${REPO_EVAL_CONTEXT}"
+  log "RedPajama source: ${OFFICIAL_REDPJ_DATASET}${OFFICIAL_REDPJ_CONFIG:+/${OFFICIAL_REDPJ_CONFIG}}, split=${OFFICIAL_REDPJ_SPLIT}, streaming shuffle buffer=${OFFICIAL_REDPJ_SHUFFLE_BUFFER}"
   for model in ${MODELS}; do
     run_model_job "${model}"
   done
