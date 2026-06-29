@@ -11,14 +11,14 @@ from transformers import AutoTokenizer
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Build a RedPajama calibration token cache from togethercomputer/RedPajama-Data-1T."
+        description="Build a RedPajama calibration token cache from a HF dataset."
     )
     parser.add_argument("--model", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--seq-len", type=int, default=4096)
     parser.add_argument("--num-examples", type=int, default=1024)
-    parser.add_argument("--dataset", default="togethercomputer/RedPajama-Data-1T")
-    parser.add_argument("--config", default="c4")
+    parser.add_argument("--dataset", default="ZengXiangyu/RedPajama-Data-1T-Sample")
+    parser.add_argument("--config", default="")
     parser.add_argument("--split", default="train")
     parser.add_argument("--text-field", default="text")
     parser.add_argument("--seed", type=int, default=0)
@@ -55,8 +55,8 @@ def main():
     rng = random.Random(args.seed)
 
     print(
-        "Loading official RedPajama calibration source: "
-        f"dataset={args.dataset}, config={args.config}, split={args.split}, streaming=True",
+        "Loading RedPajama calibration source: "
+        f"dataset={args.dataset}, config={args.config or '<none>'}, split={args.split}, streaming=True",
         flush=True,
     )
     tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
@@ -67,9 +67,11 @@ def main():
     if features is not None:
         print(f"Using explicit features override for {args.dataset}/{args.config}", flush=True)
 
+    load_args = [args.dataset]
+    if args.config:
+        load_args.append(args.config)
     dataset = load_dataset(
-        args.dataset,
-        args.config,
+        *load_args,
         split=args.split,
         streaming=True,
         trust_remote_code=True,
@@ -79,7 +81,7 @@ def main():
 
     tokens = []
     seen = 0
-    progress = tqdm(total=args.num_examples, desc=f"Making official RedPajama {args.num_examples}x{args.seq_len}")
+    progress = tqdm(total=args.num_examples, desc=f"Making RedPajama {args.num_examples}x{args.seq_len}")
     for item in dataset:
         seen += 1
         text = item.get(args.text_field)
