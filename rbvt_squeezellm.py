@@ -47,17 +47,18 @@ class ActivationStatsCollector:
     def _hook(self, name: str):
         def hook(_module, inp, _out):
             x = inp[0] if isinstance(inp, tuple) else inp
-            x = x.detach().reshape(-1, x.shape[-1]).float().cpu()
+            x = x.detach().reshape(-1, x.shape[-1]).float()
+            s = x.sum(dim=0).cpu()
             if name not in self.sum:
-                self.sum[name] = x.sum(dim=0)
+                self.sum[name] = s
                 self.count[name] = x.shape[0]
                 if self.want_var:
-                    self.sumsq[name] = (x * x).sum(dim=0)
+                    self.sumsq[name] = (x * x).sum(dim=0).cpu()
             else:
-                self.sum[name] += x.sum(dim=0)
+                self.sum[name] += s
                 self.count[name] += x.shape[0]
                 if self.want_var:
-                    self.sumsq[name] += (x * x).sum(dim=0)
+                    self.sumsq[name] += (x * x).sum(dim=0).cpu()
         return hook
 
     def register(self):
@@ -99,10 +100,10 @@ def collect_activation_stats(analyzer, tokens: torch.Tensor, n_calib: int, batch
         limit = min(n_calib, tokens.shape[0])
         for start in tqdm(range(0, limit, batch_size), desc="Collecting RBVT activation stats"):
             batch = tokens[start:start + batch_size].to(model.device)
-            with torch.no_grad():
+            with torch.inference_mode():
                 model(input_ids=batch, use_cache=False)
             del batch
-            if torch.cuda.is_available():
+            if torch.cuda.is_available() and (start // batch_size + 1) % 16 == 0:
                 torch.cuda.empty_cache()
     finally:
         collector.remove()
