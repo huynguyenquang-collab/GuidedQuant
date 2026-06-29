@@ -4,7 +4,7 @@ import os
 import random
 
 import torch
-from datasets import load_dataset
+from datasets import Features, Value, load_dataset
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
@@ -26,6 +26,29 @@ def parse_args():
     return parser.parse_args()
 
 
+def redpajama_features(dataset_name, config_name):
+    if dataset_name != "togethercomputer/RedPajama-Data-1T":
+        return None
+
+    # The official c4 config stores "meta" as a struct in the data files. Some
+    # versions of datasets/custom-code metadata try to cast it to string while
+    # streaming, which fails before any row is yielded. Override that schema.
+    if config_name == "c4":
+        return Features(
+            {
+                "text": Value("string"),
+                "meta": {
+                    "timestamp": Value("string"),
+                    "url": Value("string"),
+                    "language": Value("string"),
+                    "source": Value("string"),
+                },
+            }
+        )
+
+    return None
+
+
 def main():
     args = parse_args()
     rng = random.Random(args.seed)
@@ -39,12 +62,17 @@ def main():
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    features = redpajama_features(args.dataset, args.config)
+    if features is not None:
+        print(f"Using explicit features override for {args.dataset}/{args.config}", flush=True)
+
     dataset = load_dataset(
         args.dataset,
         args.config,
         split=args.split,
         streaming=True,
         trust_remote_code=True,
+        features=features,
     )
     dataset = dataset.shuffle(seed=args.seed, buffer_size=args.shuffle_buffer)
 
