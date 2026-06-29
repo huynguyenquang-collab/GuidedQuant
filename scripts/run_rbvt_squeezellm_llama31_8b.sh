@@ -18,10 +18,10 @@ CALIB_SEED="${CALIB_SEED:-0}"
 MIRROR_DATASET="${MIRROR_DATASET:-ZengXiangyu/RedPajama-Data-1T-Sample}"
 
 RBVT_N_CALIB="${RBVT_N_CALIB:-1024}"
-RBVT_BATCH_SIZE="${RBVT_BATCH_SIZE:-1}"
+RBVT_BATCH_SIZE="${RBVT_BATCH_SIZE:-4}"
 RBVT_LAMBDA="${RBVT_LAMBDA:-1.0}"
 RBVT_TOPK="${RBVT_TOPK:-0}"
-RBVT_ROW_CHUNK="${RBVT_ROW_CHUNK:-1024}"
+RBVT_ROW_CHUNK="${RBVT_ROW_CHUNK:-4096}"
 RBVT_GAP_FLOOR="${RBVT_GAP_FLOOR:-1e-8}"
 
 REPO_EVAL_CONTEXT="${REPO_EVAL_CONTEXT:-8192}"
@@ -34,6 +34,7 @@ RUN_RBVT="${RUN_RBVT:-1}"
 RUN_REPO_EVAL="${RUN_REPO_EVAL:-1}"
 RUN_NONUQ_EVAL="${RUN_NONUQ_EVAL:-1}"
 OVERWRITE_RBVT="${OVERWRITE_RBVT:-0}"
+OVERWRITE_RBVT_STATS="${OVERWRITE_RBVT_STATS:-0}"
 
 export PYTHONPATH="${REPO_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
@@ -52,6 +53,7 @@ TOKEN_PATH="${CACHE_DIR}/tokens/${MODEL_BASENAME}-redpajama_s${NUM_EXAMPLES}_blk
 SQLLM_QUANTIZED_PATH="${CACHE_DIR}/quantized/${MODEL_BASENAME}-w${BITS}_orig${BITS}-redpajama_s${NUM_EXAMPLES}_blk${SEQ_LEN}"
 SQLLM_PACKED_PATH="${CACHE_DIR}/packed/anyprec-${MODEL_BASENAME}-w${BITS}_orig${BITS}-redpajama_s${NUM_EXAMPLES}_blk${SEQ_LEN}"
 RBVT_PACKED_PATH="${CACHE_DIR}/rbvt_sqllm_packed/anyprec-rbvt-sqllm-${MODEL_BASENAME}-w${BITS}-redpajama_s${NUM_EXAMPLES}_blk${SEQ_LEN}_lambda${RBVT_LAMBDA}"
+RBVT_STATS_PATH="${CACHE_DIR}/rbvt_sqllm_stats/${MODEL_BASENAME}-w${BITS}-rbvt-sqllm-redpajama_s${NUM_EXAMPLES}_blk${SEQ_LEN}_lambda${RBVT_LAMBDA}_n${RBVT_N_CALIB}.pt"
 REPO_RESULTS_FILE="results_rbvt_sqllm_${MODEL_BASENAME}_redpajama${SEQ_LEN}_${BITS}bit_ctx${REPO_EVAL_CONTEXT}.json"
 NONUQ_RESULTS_FILE="outputs/nonuquant_ppl_rbvt_sqllm_${MODEL_BASENAME}_${BITS}bit.json"
 
@@ -155,6 +157,9 @@ run_rbvt_squeezellm() {
   if [[ "${OVERWRITE_RBVT}" == "1" ]]; then
     overwrite_args+=(--overwrite)
   fi
+  if [[ "${OVERWRITE_RBVT_STATS}" == "1" ]]; then
+    overwrite_args+=(--overwrite-stats)
+  fi
 
   log "Running RBVT on GuidedQuant SqueezeLLM assignments"
   "${PYTHON_BIN}" rbvt_squeezellm.py \
@@ -167,6 +172,7 @@ run_rbvt_squeezellm() {
     --tokens-path "${TOKEN_PATH}" \
     --input-quantized-path "${SQLLM_QUANTIZED_PATH}" \
     --output-packed-path "${RBVT_PACKED_PATH}" \
+    --stats-path "${RBVT_STATS_PATH}" \
     --n-calib "${RBVT_N_CALIB}" \
     --batch-size "${RBVT_BATCH_SIZE}" \
     --rbvt-lambda "${RBVT_LAMBDA}" \
@@ -239,7 +245,7 @@ run_nonuq_eval() {
 main() {
   log "Target model: ${MODEL_NAME}"
   log "Calibration: ${MIRROR_DATASET}, ${NUM_EXAMPLES}x${SEQ_LEN}, seed=${CALIB_SEED}"
-  log "RBVT config: lambda=${RBVT_LAMBDA}, topk=${RBVT_TOPK}, row_chunk=${RBVT_ROW_CHUNK}, n_calib=${RBVT_N_CALIB}"
+  log "RBVT config: lambda=${RBVT_LAMBDA}, topk=${RBVT_TOPK}, row_chunk=${RBVT_ROW_CHUNK}, batch=${RBVT_BATCH_SIZE}, n_calib=${RBVT_N_CALIB}"
   ensure_mirror_calibration
   run_squeezellm_if_needed
   run_rbvt_squeezellm

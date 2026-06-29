@@ -305,6 +305,11 @@ def apply_rbvt_to_sqllm_cache(args, analyzer, means, variances):
 
     total = RBVTStats()
     for layer_idx in tqdm(range(analyzer.num_layers), desc="Applying RBVT to SqueezeLLM cache"):
+        output_weight_path = dst / "weights" / f"l{layer_idx}.pt"
+        if output_weight_path.exists() and not args.overwrite:
+            logging.info("Skipping completed RBVT layer cache: %s", output_weight_path)
+            continue
+
         layer_weights = torch.load(src / "weights" / f"l{layer_idx}.pt", map_location="cpu")
         layer_luts = torch.load(src / f"lut_{args.bits}" / f"l{layer_idx}.pt", map_location="cpu")
         fp_weights = analyzer.get_layer_weights(layer_idx)
@@ -333,7 +338,7 @@ def apply_rbvt_to_sqllm_cache(args, analyzer, means, variances):
             del W_fp, indices, luts, new_indices
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-        torch.save(out_layer, dst / "weights" / f"l{layer_idx}.pt")
+        torch.save(out_layer, output_weight_path)
 
     return total
 
@@ -350,9 +355,10 @@ def parse_args():
     parser.add_argument("--input-quantized-path", default="")
     parser.add_argument("--output-quantized-path", default="")
     parser.add_argument("--output-packed-path", default="")
+    parser.add_argument("--stats-path", default="")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--n-calib", type=int, default=1024)
-    parser.add_argument("--batch-size", type=int, default=1)
+    parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--rbvt-lambda", type=float, default=1.0)
     parser.add_argument("--rbvt-topk", type=int, default=0)
     parser.add_argument("--row-chunk", type=int, default=1024)
@@ -360,6 +366,7 @@ def parse_args():
     parser.add_argument("--allow-overshoot", action="store_true")
     parser.add_argument("--cpu-count", type=int, default=None)
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--overwrite-stats", action="store_true")
     return parser.parse_args()
 
 
@@ -372,6 +379,7 @@ def main():
     args.input_quantized_path = args.input_quantized_path or f"{args.cache_dir}/quantized/{model_basename}-w{args.bits}_orig{args.bits}-{args.dataset}_s{args.num_examples}_blk{args.seq_len}"
     args.output_quantized_path = args.output_quantized_path or f"{args.cache_dir}/rbvt_sqllm_quantized/{run_name}"
     args.output_packed_path = args.output_packed_path or f"{args.cache_dir}/rbvt_sqllm_packed/anyprec-rbvt-sqllm-{model_basename}-w{args.bits}-{args.dataset}_s{args.num_examples}_blk{args.seq_len}_lambda{args.rbvt_lambda:g}"
+    args.stats_path = args.stats_path or f"{args.cache_dir}/rbvt_sqllm_stats/{run_name}_n{args.n_calib}.pt"
 
     if not Path(args.tokens_path).exists():
         raise FileNotFoundError(f"Missing calibration tokens: {args.tokens_path}")
@@ -386,14 +394,35 @@ def main():
     tokens = normalize_tokens(torch.load(args.tokens_path, map_location="cpu"), args.seq_len)
     logging.info("Loaded calibration tokens: shape=%s", tuple(tokens.shape))
 
-    means, variances = collect_activation_stats(
-        analyzer=analyzer,
-        tokens=tokens,
-        n_calib=args.n_calib,
-        batch_size=args.batch_size,
-        rbvt_lambda=args.rbvt_lambda,
-    )
-    logging.info("Collected activation stats: means=%d variances=%d", len(means), len(variances))
+    stats_path = Path(args.stats_path)
+    if stats_path.exists() and not args.overwrite_stats:
+        logging.info("Loading cached RBVT activation stats: %s", stats_path)
+        payload = torch.load(stats_path, map_location="cpu")
+        means = payload["means"]
+        variances = payload["variances"]
+    else:
+        means, variances = collect_activation_stats(
+            analyzer=analyzer,
+            tokens=tokens,
+            n_calib=args.n_calib,
+            batch_size=args.batch_size,
+            rbvt_lambda=args.rbvt_lambda,
+        )
+        stats_path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(
+            {
+                "model": args.model,
+                "tokens_path": args.tokens_path,
+                "n_calib": args.n_calib,
+                "seq_len": args.seq_len,
+                "rbvt_lambda": args.rbvt_lambda,
+                "means": means,
+                "variances": variances,
+            },
+            stats_path,
+        )
+        logging.info("Saved RBVT activation stats: %s", stats_path)
+    logging.info("RBVT activation stats ready: means=%d variances=%d", len(means), len(variances))
 
     totals = apply_rbvt_to_sqllm_cache(args, analyzer, means, variances)
     logging.info(
