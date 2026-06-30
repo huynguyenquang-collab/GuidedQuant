@@ -56,20 +56,14 @@ def get_gradients(
     # 2) Prepare model
     # ----------------------------------------------------------------
     model = analyzer.model
-    architecture = model.config.architectures[0] if getattr(model.config, "architectures", None) else ""
-    if torch.cuda.device_count() > 1 or architecture.startswith("Qwen3_5"):
+    if torch.cuda.device_count() > 1:
         model = dispatch_model(model)
 
     model = model.bfloat16()
     model.eval()
 
-    if (
-        model.device.type != 'cuda'
-        and torch.cuda.device_count() == 1
-        and not architecture.startswith("Qwen3_5")
-    ):
+    if model.device.type != 'cuda' and torch.cuda.device_count() == 1:
         model.cuda()
-    run_device = model.get_input_embeddings().weight.device
 
     layers = analyzer.get_layers()
 
@@ -146,7 +140,7 @@ def get_gradients(
     # 5) Forward/backward pass over data
     # ----------------------------------------------------------------
     for tokens in tqdm(input_tokens, desc="Calculating gradients"):
-        tokens = tokens.to(run_device).unsqueeze(0)
+        tokens = tokens.to(model.device).unsqueeze(0)
         outputs = model(input_ids=tokens, labels=tokens)
         loss = outputs.loss
         loss.backward()

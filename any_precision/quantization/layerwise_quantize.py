@@ -366,9 +366,8 @@ def fix_hessian_shape(H: torch.Tensor) -> torch.Tensor:
         raise ValueError(f"Invalid Hessian shape: {H.shape}")
 
 
-def get_layer_loader(analyzer, initialization_path, hessians_path, seed_precision):
+def get_layer_loader(analyzer, module_names, initialization_path, hessians_path, seed_precision):
     def layer_loader(l):
-        module_names = analyzer.get_layer_module_names(l)
         # Load the initialization data (labels and centroids)
         init_labels_file_name = os.path.join(initialization_path, "weights", f"l{l}.pt")
         init_labels = torch.load(init_labels_file_name)
@@ -429,10 +428,10 @@ def _save_results(
     torch.save(parent_weight_dict, output_weights_layer_file_name)
 
 
-def get_saver(parent_parameters_path, seed_precision, parent_precision):
+def get_saver(parent_parameters_path, seed_precision, parent_precision, module_names):
     """Returns a function that saves the results for a given layer"""
 
-    def save_results(module_names, luts_by_bit_by_module, parent_weights, log_dict, l):
+    def save_results(luts_by_bit_by_module, parent_weights, log_dict, l):
         return _save_results(
             parent_parameters_path,
             seed_precision,
@@ -516,10 +515,10 @@ def seed(
     logging.info(f"Quantizing layers {layers_to_process}")
 
     layer_loader = get_layer_loader(
-        analyzer, initialization_path, hessians_path, seed_precision
+        analyzer, module_names, initialization_path, hessians_path, seed_precision
     )
     layer_saver = get_saver(
-        output_folder, seed_precision, seed_precision
+        output_folder, seed_precision, seed_precision, module_names
     )
 
     if pipelined_io:
@@ -548,7 +547,7 @@ def seed(
                 )
 
                 io_executor.submit(
-                    layer_saver, module_names, luts_by_bit_by_module, parent_weights, log_dict, l
+                    layer_saver, luts_by_bit_by_module, parent_weights, log_dict, l
                 )
                 pb.update(1)
             pb.close()
@@ -571,6 +570,6 @@ def seed(
                 cd_cycles=cd_cycles,
             )
 
-            layer_saver(module_names, luts_by_bit_by_module, parent_weights, log_dict, l)
+            layer_saver(luts_by_bit_by_module, parent_weights, log_dict, l)
             pb.update(1)
         pb.close()
