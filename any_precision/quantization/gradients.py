@@ -60,7 +60,23 @@ def get_gradients(
         model = dispatch_model(model)
 
     model = model.bfloat16()
-    model.eval()
+
+    use_gradient_checkpointing = os.environ.get("GUIDEDQUANT_GRADIENT_CHECKPOINTING", "1") != "0"
+    if use_gradient_checkpointing and hasattr(model, "gradient_checkpointing_enable"):
+        logging.info("Enabling gradient checkpointing for calibration backward pass.")
+        if hasattr(model.config, "use_cache"):
+            model.config.use_cache = False
+        if hasattr(model, "model") and hasattr(model.model, "config") and hasattr(model.model.config, "use_cache"):
+            model.model.config.use_cache = False
+        try:
+            model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+        except TypeError:
+            model.gradient_checkpointing_enable()
+        # HF decoder layers only checkpoint while training. Llama has no dropout
+        # on this path, and the memory reduction is necessary for 13B on 1x80GB.
+        model.train()
+    else:
+        model.eval()
 
     if model.device.type != 'cuda' and torch.cuda.device_count() == 1:
         model.cuda()
