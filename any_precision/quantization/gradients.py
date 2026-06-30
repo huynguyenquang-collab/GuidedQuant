@@ -5,7 +5,6 @@ import logging
 from typing import Optional, Tuple
 from .config import *
 from any_precision.analyzer import dispatch_model
-from any_precision.analyzer.utils import get_model_architecture
 
 
 def get_gradients(
@@ -57,7 +56,7 @@ def get_gradients(
     # 2) Prepare model
     # ----------------------------------------------------------------
     model = analyzer.model
-    architecture = get_model_architecture(model)
+    architecture = model.config.architectures[0] if getattr(model.config, "architectures", None) else ""
     if torch.cuda.device_count() > 1 or architecture.startswith("Qwen3_5"):
         model = dispatch_model(model)
 
