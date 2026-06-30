@@ -4,7 +4,7 @@ from transformers.modeling_outputs import BaseModelOutputWithPast
 from typing import Optional, Union, List, Tuple
 from functools import partial
 from transformers.cache_utils import Cache, DynamicCache, SlidingWindowCache, StaticCache, HybridCache
-from transformers.utils import auto_docstring, can_return_tuple, is_torch_flex_attn_available, logging
+from transformers.utils import LossKwargs, auto_docstring, can_return_tuple, is_torch_flex_attn_available, logging
 from transformers.processing_utils import Unpack
 from transformers.modeling_flash_attention_utils import FlashAttentionKwargs
 
