@@ -54,9 +54,10 @@ def main():
     args = parse_args()
     rng = random.Random(args.seed)
 
+    use_streaming = args.dataset == "togethercomputer/RedPajama-Data-1T"
     print(
         "Loading RedPajama calibration source: "
-        f"dataset={args.dataset}, config={args.config or '<none>'}, split={args.split}, streaming=True",
+        f"dataset={args.dataset}, config={args.config or '<none>'}, split={args.split}, streaming={use_streaming}",
         flush=True,
     )
     tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
@@ -73,32 +74,58 @@ def main():
     dataset = load_dataset(
         *load_args,
         split=args.split,
-        streaming=True,
+        streaming=use_streaming,
         trust_remote_code=True,
         features=features,
     )
-    dataset = dataset.shuffle(seed=args.seed, buffer_size=args.shuffle_buffer)
+    if use_streaming:
+        dataset = dataset.shuffle(seed=args.seed, buffer_size=args.shuffle_buffer)
 
     tokens = []
     seen = 0
     progress = tqdm(total=args.num_examples, desc=f"Making RedPajama {args.num_examples}x{args.seq_len}")
-    for item in dataset:
-        seen += 1
-        text = item.get(args.text_field)
-        if text is None:
-            text = next((value for value in item.values() if isinstance(value, str)), None)
-        if not isinstance(text, str) or not text.strip():
-            continue
 
-        encoded = tokenizer(text, return_tensors="pt", truncation=False).input_ids[0]
-        if encoded.numel() < args.seq_len:
-            continue
+    if use_streaming:
+        for item in dataset:
+            seen += 1
+            text = item.get(args.text_field)
+            if text is None:
+                text = next((value for value in item.values() if isinstance(value, str)), None)
+            if not isinstance(text, str) or not text.strip():
+                continue
 
-        start = rng.randint(0, encoded.numel() - args.seq_len)
-        tokens.append(encoded[start : start + args.seq_len].to(torch.long))
-        progress.update(1)
-        if len(tokens) >= args.num_examples:
-            break
+            encoded = tokenizer(text, return_tensors="pt", truncation=False).input_ids[0]
+            if encoded.numel() < args.seq_len:
+                continue
+
+            start = rng.randint(0, encoded.numel() - args.seq_len)
+            tokens.append(encoded[start : start + args.seq_len].to(torch.long))
+            progress.update(1)
+            if len(tokens) >= args.num_examples:
+                break
+    else:
+        selected_indices = set()
+        while len(tokens) < args.num_examples:
+            seen += 1
+            idx = rng.randint(0, len(dataset) - 1)
+            if idx in selected_indices:
+                continue
+
+            item = dataset[idx]
+            text = item.get(args.text_field)
+            if text is None:
+                text = next((value for value in item.values() if isinstance(value, str)), None)
+            if not isinstance(text, str) or not text.strip():
+                continue
+
+            encoded = tokenizer(text, return_tensors="pt", truncation=False).input_ids[0]
+            if encoded.numel() < args.seq_len:
+                continue
+
+            start = rng.randint(0, encoded.numel() - args.seq_len)
+            tokens.append(encoded[start : start + args.seq_len].to(torch.long))
+            selected_indices.add(idx)
+            progress.update(1)
     progress.close()
 
     if len(tokens) != args.num_examples:
