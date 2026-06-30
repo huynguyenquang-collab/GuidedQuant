@@ -1,6 +1,10 @@
 import torch
 from transformers import AutoModelForCausalLM, PreTrainedModel, AutoTokenizer, PreTrainedTokenizerBase
-from .splitted_models import SplittedLlamaModel, SplittedQwen3Model, SplittedGemma3TextModel
+from .splitted_models import (
+    get_splitted_gemma3_text_model,
+    get_splitted_llama_model,
+    get_splitted_qwen3_model,
+)
 
 
 def load_model(model_str_or_model, dtype=torch.float16):
@@ -14,7 +18,6 @@ def load_model(model_str_or_model, dtype=torch.float16):
             model_str_or_model,
             trust_remote_code=True,
             torch_dtype=dtype,
-            device_map='cpu',
         )
     else:
         assert isinstance(model_str_or_model, PreTrainedModel), "model must be a string or a PreTrainedModel"
@@ -24,18 +27,21 @@ def load_model(model_str_or_model, dtype=torch.float16):
 
 def dispatch_model(model):
     if model.config.architectures[0] == 'LlamaForCausalLM':
+        SplittedLlamaModel = get_splitted_llama_model()
         model.model.__class__ = SplittedLlamaModel
         model.model.config.use_cache = False
         model.model.set_devices()
         model.lm_head.to("cuda:0")
         return model
     elif model.config.architectures[0] == 'Qwen3ForCausalLM':
+        SplittedQwen3Model = get_splitted_qwen3_model()
         model.model.__class__ = SplittedQwen3Model
         model.model.config.use_cache = False
         model.model.set_devices()
         model.lm_head.to("cuda:0")
         return model
     elif model.config.architectures[0] == 'Gemma3ForConditionalGeneration':
+        SplittedGemma3TextModel = get_splitted_gemma3_text_model()
         model.to("cuda:0")
         model.model.language_model.__class__ = SplittedGemma3TextModel
         model.model.language_model.config.use_cache = False
