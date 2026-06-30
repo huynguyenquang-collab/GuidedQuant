@@ -1,6 +1,10 @@
 import torch
 from transformers import AutoModelForCausalLM, PreTrainedModel, AutoTokenizer, PreTrainedTokenizerBase
-from .splitted_models import SplittedLlamaModel, SplittedQwen3Model, SplittedGemma3TextModel
+from .splitted_models import (
+    get_splitted_gemma3_text_model,
+    get_splitted_llama_model,
+    get_splitted_qwen3_model,
+)
 
 
 def load_model(model_str_or_model, dtype=torch.float16):
@@ -25,30 +29,37 @@ def load_model(model_str_or_model, dtype=torch.float16):
 def dispatch_model(model):
     architecture = model.config.architectures[0]
     if architecture == 'LlamaForCausalLM':
+        SplittedLlamaModel = get_splitted_llama_model()
         model.model.__class__ = SplittedLlamaModel
         model.model.config.use_cache = False
         model.model.set_devices()
         model.lm_head.to("cuda:0")
         return model
     elif architecture == 'Qwen3ForCausalLM':
+        SplittedQwen3Model = get_splitted_qwen3_model()
         model.model.__class__ = SplittedQwen3Model
         model.model.config.use_cache = False
         model.model.set_devices()
         model.lm_head.to("cuda:0")
         return model
     elif architecture == 'Gemma3ForConditionalGeneration':
+        SplittedGemma3TextModel = get_splitted_gemma3_text_model()
         model.to("cuda:0")
         model.model.language_model.__class__ = SplittedGemma3TextModel
         model.model.language_model.config.use_cache = False
         model.model.language_model.set_devices()
         model.lm_head.to("cuda:0")
         return model
-    elif architecture in {'Qwen3_5ForConditionalGeneration', 'Qwen3_5ForCausalLM'}:
-        raise NotImplementedError(
-            f"Model {architecture} is not supported by this GuidedQuant SqueezeLLM/LNQ path. "
-            "Qwen3.5 uses hybrid linear-attention/full-attention layers with different module names per layer, "
-            "while this quantizer expects the same quantized module list in every decoder layer."
-        )
+    elif architecture == 'Qwen3_5ForConditionalGeneration':
+        model.model.language_model.config.use_cache = False
+        model.model.language_model.cuda()
+        model.lm_head.to("cuda:0")
+        return model
+    elif architecture == 'Qwen3_5ForCausalLM':
+        model.model.config.use_cache = False
+        model.model.cuda()
+        model.lm_head.to("cuda:0")
+        return model
     else:
         raise NotImplementedError(f"Model {architecture} is not supported")
 

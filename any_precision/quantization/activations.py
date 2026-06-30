@@ -47,7 +47,9 @@ def get_inps(
 
     dtype = next(iter(model.parameters())).dtype
     nsamples_per_device = (len(data) - 1) // len(devices) + 1
-    if isinstance(model.config, Gemma3Config):
+    if hasattr(model.config, "text_config") and hasattr(model.config.text_config, "hidden_size"):
+        hidden_size = model.config.text_config.hidden_size
+    elif isinstance(model.config, Gemma3Config):
         hidden_size = model.config.text_config.hidden_size
     else:
         assert hasattr(model.config, "hidden_size"), f"Model config has no hidden_size: {model.config}"
@@ -126,7 +128,9 @@ def update_outs(
     out_losses = []
     description = "Calculating outputs for next layer"
     for j in trange(len(inps_tensor), desc=description, leave=False):
-        outs_batch = layer(inps_tensor[j].to(device).unsqueeze(0), **forward_args)[0]
+        outs_batch = layer(inps_tensor[j].to(device).unsqueeze(0), **forward_args)
+        if isinstance(outs_batch, (tuple, list)):
+            outs_batch = outs_batch[0]
         outs_tensor[j].copy_(outs_batch.reshape_as(outs_tensor[j]), non_blocking=True)
     return out_losses
 
@@ -554,7 +558,6 @@ def accumulate_hessians(
 
     logging.info(f"Processed layers: {processed_layers}")
 
-    module_names = analyzer.module_names
     from .utils import get_progress_bar
     pb = get_progress_bar(num_layers, "Accumulating Hessians blockwise")
 
@@ -581,6 +584,7 @@ def accumulate_hessians(
             pb.update(1)
             continue
 
+        module_names = analyzer.get_layer_module_names(l)
         if len(devices) == 1:
             hessian_handlers = init_hessian_engines_single_wrapper(
                 layer,
@@ -691,7 +695,6 @@ def accumulate_saliency_weighted_hessians(
         
     logging.info(f"Processed layers: {processed_layers}")
 
-    module_names = analyzer.module_names  # e.g. sub-layer names
     from .utils import get_progress_bar     # adapt if needed
     pb = get_progress_bar(num_layers, "Accumulating saliency Hessians blockwise")
 
@@ -727,6 +730,7 @@ def accumulate_saliency_weighted_hessians(
             pb.update(1)
             continue
 
+        module_names = analyzer.get_layer_module_names(l)
 
         # (B) Load saliencies for layer l
         #     We expect e.g. saliency_path/l{l}.pt => either:

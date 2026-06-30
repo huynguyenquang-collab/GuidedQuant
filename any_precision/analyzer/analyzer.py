@@ -49,11 +49,20 @@ class ModelAnalyzer:
     constructor. Alternatively, you can instantiate from a yaml file using the from_yaml method.
     """
 
-    def __init__(self, model: AutoModelForCausalLM, module_names, model_name, layers_name, include_tokenizer=False):
+    def __init__(
+            self,
+            model: AutoModelForCausalLM,
+            module_names,
+            model_name,
+            layers_name,
+            include_tokenizer=False,
+            allow_missing_modules=False,
+    ):
         self.model = model
         self.module_names = module_names
         self.model_name = model_name
         self.layers_name = layers_name
+        self.allow_missing_modules = allow_missing_modules
         self.config = model.config
         self.state_dict = model.state_dict()
         self.dropped_original_weights = False
@@ -73,6 +82,8 @@ class ModelAnalyzer:
             "model_name": self.model_name,
             "layers_name": self.layers_name,
         }
+        if self.allow_missing_modules:
+            quant_config["allow_missing_modules"] = True
         return quant_config
 
     @classmethod
@@ -96,9 +107,19 @@ class ModelAnalyzer:
         for module_name in self.module_names:
             module = layer
             for attrib_name in module_name.split('.'):
+                if not hasattr(module, attrib_name):
+                    if self.allow_missing_modules:
+                        module = None
+                        break
+                    raise AttributeError(f"Layer {layer.__class__.__name__} has no module '{module_name}'")
                 module = getattr(module, attrib_name)
+            if module is None:
+                continue
             modules[module_name] = module
         return modules
+
+    def get_layer_module_names(self, layer_idx):
+        return list(self.get_modules(self.get_layers()[layer_idx]).keys())
 
     def get_layer_weights(self, layer_idx):
         """Return the relevant weights of the model."""
@@ -126,8 +147,8 @@ class ModelAnalyzer:
     def drop_original_weights(self):
         weight_key_prefixes = [f'{self.model_name}.{self.layers_name}.{i}' for i in range(self.num_layers)]
         weight_key_postfix = 'weight'
-        for prefix in weight_key_prefixes:
-            for module_name in self.module_names:
+        for layer_idx, prefix in enumerate(weight_key_prefixes):
+            for module_name in self.get_layer_module_names(layer_idx):
                 key = f"{prefix}.{module_name}.{weight_key_postfix}"
                 self.state_dict.pop(key)
 

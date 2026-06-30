@@ -315,7 +315,7 @@ def apply_rbvt_to_sqllm_cache(args, analyzer, means, variances):
         layer_luts = torch.load(src / f"lut_{args.bits}" / f"l{layer_idx}.pt", map_location="cpu")
         fp_weights = analyzer.get_layer_weights(layer_idx)
         out_layer = {}
-        for module_name in analyzer.module_names:
+        for module_name in analyzer.get_layer_module_names(layer_idx):
             stat_name = f"{layer_idx:02}={module_name}"
             if stat_name not in means:
                 raise RuntimeError(f"Missing RBVT activation stats for {stat_name}")

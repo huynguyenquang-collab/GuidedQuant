@@ -163,14 +163,23 @@ def pack(
 
     model_name = analyzer.model_name
     layers_name = analyzer.layers_name
-    module_names = analyzer.module_names
     config = analyzer.config  # original model config
     arch_config = analyzer.get_arch_config()
 
     state_dict = analyzer.state_dict
 
-    args_list = [(layer_idx, lut_path, model_name, layers_name, module_names, parent_precision, seed_precision) for
-                 layer_idx in range(num_layers)]
+    args_list = [
+        (
+            layer_idx,
+            lut_path,
+            model_name,
+            layers_name,
+            analyzer.get_layer_module_names(layer_idx),
+            parent_precision,
+            seed_precision,
+        )
+        for layer_idx in range(num_layers)
+    ]
 
     with Pool(cpu_count) as pool:
         for layer_idx, layer_data in tqdm(pool.imap(_process_layer_data, args_list), total=num_layers, desc="Packing"):
