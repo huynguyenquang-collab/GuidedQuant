@@ -23,27 +23,34 @@ def load_model(model_str_or_model, dtype=torch.float16):
 
 
 def dispatch_model(model):
-    if model.config.architectures[0] == 'LlamaForCausalLM':
+    architecture = model.config.architectures[0]
+    if architecture == 'LlamaForCausalLM':
         model.model.__class__ = SplittedLlamaModel
         model.model.config.use_cache = False
         model.model.set_devices()
         model.lm_head.to("cuda:0")
         return model
-    elif model.config.architectures[0] == 'Qwen3ForCausalLM':
+    elif architecture == 'Qwen3ForCausalLM':
         model.model.__class__ = SplittedQwen3Model
         model.model.config.use_cache = False
         model.model.set_devices()
         model.lm_head.to("cuda:0")
         return model
-    elif model.config.architectures[0] == 'Gemma3ForConditionalGeneration':
+    elif architecture == 'Gemma3ForConditionalGeneration':
         model.to("cuda:0")
         model.model.language_model.__class__ = SplittedGemma3TextModel
         model.model.language_model.config.use_cache = False
         model.model.language_model.set_devices()
         model.lm_head.to("cuda:0")
         return model
+    elif architecture in {'Qwen3_5ForConditionalGeneration', 'Qwen3_5ForCausalLM'}:
+        raise NotImplementedError(
+            f"Model {architecture} is not supported by this GuidedQuant SqueezeLLM/LNQ path. "
+            "Qwen3.5 uses hybrid linear-attention/full-attention layers with different module names per layer, "
+            "while this quantizer expects the same quantized module list in every decoder layer."
+        )
     else:
-        raise NotImplementedError(f"Model {model.config.architectures[0]} is not supported")
+        raise NotImplementedError(f"Model {architecture} is not supported")
 
 
 def load_tokenizer(model_str_or_model_or_tokenizer):
