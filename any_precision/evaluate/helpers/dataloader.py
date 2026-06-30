@@ -6,6 +6,7 @@
 import numpy as np
 import torch
 from datasets import load_dataset
+from transformers.tokenization_utils_base import BatchEncoding
 
 
 def set_seed(seed):
@@ -49,7 +50,6 @@ def get_c4(tokenizer, seqlen):
             valenc.append(tmp.input_ids[:, i:j])
     valenc = torch.hstack(valenc)
 
-    from transformers.tokenization_utils import BatchEncoding
     valenc = BatchEncoding({'input_ids': valenc, 'attention_mask': torch.ones_like(valenc)})
     return valenc
 
@@ -76,7 +76,6 @@ def get_c4_new(tokenizer, seqlen):
     valenc = tokenizer(" ".join(valdata[:1100]["text"]), return_tensors="pt")
     valenc = valenc.input_ids[:, : (256 * seqlen)]
 
-    from transformers.tokenization_utils import BatchEncoding
     valenc = BatchEncoding({'input_ids': valenc, 'attention_mask': torch.ones_like(valenc)})
     return valenc
 
