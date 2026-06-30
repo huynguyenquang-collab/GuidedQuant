@@ -7,6 +7,15 @@ from .splitted_models import (
 )
 
 
+def get_model_architecture(model):
+    architectures = getattr(model.config, "architectures", None)
+    if architectures:
+        if len(architectures) != 1:
+            raise AssertionError("Model has multiple architectures")
+        return architectures[0]
+    return model.__class__.__name__
+
+
 def load_model(model_str_or_model, dtype=torch.float16):
     """Returns a model from a string or a model object. If a string is passed, it will be loaded from the HuggingFace"""
     if isinstance(model_str_or_model, str):
@@ -26,7 +35,7 @@ def load_model(model_str_or_model, dtype=torch.float16):
 
 
 def dispatch_model(model):
-    architecture = model.config.architectures[0]
+    architecture = get_model_architecture(model)
     if architecture == 'LlamaForCausalLM':
         SplittedLlamaModel = get_splitted_llama_model()
         model.model.__class__ = SplittedLlamaModel

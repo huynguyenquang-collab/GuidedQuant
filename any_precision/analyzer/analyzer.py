@@ -3,7 +3,7 @@ import torch
 import yaml
 import os
 import logging
-from .utils import load_model, load_tokenizer
+from .utils import get_model_architecture, load_model, load_tokenizer
 
 
 def get_analyzer(model, yaml_path=None, include_tokenizer=False):
@@ -18,18 +18,18 @@ def get_analyzer(model, yaml_path=None, include_tokenizer=False):
     if yaml_path is None:
         dirpath = os.path.dirname(os.path.realpath(__file__))
         yaml_dir = os.path.join(dirpath, f'./architectures/')
-        assert len(model.config.architectures) == 1, "Model has multiple architectures"
+        architecture = get_model_architecture(model)
         # Check if there is a yaml file for the model architecture
         for file in os.listdir(yaml_dir):
             if file.endswith(".yaml"):
                 with open(os.path.join(yaml_dir, file)) as f:
                     yaml_contents = yaml.safe_load(f)
-                if model.config.architectures[0] == yaml_contents['architecture']:
+                if architecture == yaml_contents['architecture']:
                     return ModelAnalyzer.from_arch_config(model, yaml_contents['arch_config'], include_tokenizer)
         else:
             # If no yaml file is found, use AutoQuantConfig
             logging.warning((f"Attempting to use AutoArchConfig for architecture:"
-                             f" {model.config.architectures[0]}"))
+                             f" {architecture}"))
             logging.warning("This may not work as expected!")
             return ModelAnalyzer.from_autoconfig(model, include_tokenizer=include_tokenizer)
 
