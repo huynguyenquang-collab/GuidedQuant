@@ -14,6 +14,7 @@ cd "${REPO_ROOT}"
 declare -A MODEL_ALIASES=(
   [Mistral7Bv03]="mistralai/Mistral-7B-v0.3"
   [Qwen25_7B]="Qwen/Qwen2.5-7B"
+  [Qwen3_8B]="Qwen/Qwen3-8B"
 )
 
 MODELS="${MODELS:-Mistral7Bv03 Qwen25_7B}"
