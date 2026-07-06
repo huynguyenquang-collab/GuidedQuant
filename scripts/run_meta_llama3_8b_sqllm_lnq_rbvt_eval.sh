@@ -56,15 +56,15 @@ export GUIDEDQUANT_LOSS_CHUNK_SIZE
 export GUIDEDQUANT_ATTN_IMPLEMENTATION
 export GUIDEDQUANT_RESUME_PARTIAL_GRADIENTS="${GUIDEDQUANT_RESUME_PARTIAL_GRADIENTS:-1}"
 
-overwrite_quant_pack_args() {
-  local args=()
+fill_overwrite_quant_pack_args() {
+  local -n args_ref="$1"
+  args_ref=()
   if [[ "${OVERWRITE_QUANT}" == "1" ]]; then
-    args+=(--overwrite_quantize)
+    args_ref+=(--overwrite_quantize)
   fi
   if [[ "${OVERWRITE_PACK}" == "1" ]]; then
-    args+=(--overwrite_pack)
+    args_ref+=(--overwrite_pack)
   fi
-  printf '%s\n' "${args[@]}"
 }
 
 if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
@@ -168,7 +168,7 @@ clean_outputs() {
 
 run_squeezellm() {
   local overwrite_args=()
-  mapfile -t overwrite_args < <(overwrite_quant_pack_args)
+  fill_overwrite_quant_pack_args overwrite_args
   log "Running SqueezeLLM: ${MODEL_NAME}, ${BITS}-bit, RedPajama ${NUM_EXAMPLES}x${SEQ_LEN}; grad_bs=${GUIDEDQUANT_GRADIENT_BATCH_SIZE}; attn=${GUIDEDQUANT_ATTN_IMPLEMENTATION}"
   "${PYTHON_BIN}" quantize.py "${MODEL_NAME}" \
     --seed_precision "${BITS}" \
@@ -183,7 +183,7 @@ run_squeezellm() {
 
 run_lnq_plain() {
   local overwrite_args=()
-  mapfile -t overwrite_args < <(overwrite_quant_pack_args)
+  fill_overwrite_quant_pack_args overwrite_args
   log "Running plain LNQ: ${MODEL_NAME}, ${BITS}-bit, g=${LNQ_NUM_GROUPS}, T=${LNQ_NUM_ITERATIONS}, K=${LNQ_CD_CYCLES}"
   "${PYTHON_BIN}" layerwise_nuq.py "${MODEL_NAME}" \
     --seed_precision "${BITS}" \
