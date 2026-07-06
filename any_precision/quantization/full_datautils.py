@@ -11,6 +11,7 @@ from torch import nn
 from tqdm import trange
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer
+from .torch_load import torch_load
 
 
 def set_seed(seed: Optional[int]):
@@ -216,7 +217,7 @@ def get_loaders(
         return None
     elif os.path.isfile(name):
         try:
-            data = torch.load(name)[:nsamples]
+            data = torch_load(name)[:nsamples]
         except FileNotFoundError:
             raise FileNotFoundError(
                 f"Failed to load custom data from {name}.",

@@ -9,6 +9,7 @@ import json
 import pickle
 import lm_eval
 from datasets import load_dataset
+from any_precision.quantization.torch_load import torch_load
 
 current_dir = os.path.dirname(os.path.realpath(__file__))
 
@@ -57,7 +58,7 @@ def fake_pack(parent_path, verbose=True):
     for file in tqdm(files, desc="Loading qweights", disable=not verbose):
         # filenames should be 'l0.pt'
         l = int(re.match(r'l(\d+).pt', file).group(1))
-        qweights[l] = torch.load(parent_path + '/weights/' + file)
+        qweights[l] = torch_load(parent_path + '/weights/' + file)
 
     logprint(verbose, f"Loading LUTs from {parent_path}")
     # get a list of directories in the model_path
@@ -78,14 +79,14 @@ def fake_pack(parent_path, verbose=True):
             l = int(re.match(r'l(\d+).pt', file).group(1))
             if bit not in luts:
                 luts[bit] = [None] * layer_count
-            luts[bit][l] = torch.load(parent_path + '/' + lut_dir + '/' + file)
+            luts[bit][l] = torch_load(parent_path + '/' + lut_dir + '/' + file)
 
     # Load D&S sparse weights if they exist
     sparse_model_weights = []
     if dns:
         logprint(verbose, f"D&S quantization detected. Loading sparse weights...")
         for l in range(layer_count):
-            sparse_weights = torch.load(parent_path + f'/sparse/l{l}.pt')
+            sparse_weights = torch_load(parent_path + f'/sparse/l{l}.pt')
             sparse_model_weights.append(sparse_weights)
 
     logprint(verbose, f"Replacing qweights with centroids from LUTs...")
@@ -579,7 +580,7 @@ def _load_input_tokens(tokenizer_type, testcase_name, tokenizer, chunk_size, ver
     input_tokens_cache_path = f"{current_dir}/input_tokens_cache/dataloader-{tokenizer_type}-{testcase_name}-test-ctx{chunk_size}.pt"
     if tokenizer_type and os.path.exists(input_tokens_cache_path):
         logprint(verbose, f"Loading cached input tokens from {input_tokens_cache_path}...")
-        input_tokens = torch.load(input_tokens_cache_path)
+        input_tokens = torch_load(input_tokens_cache_path)
     elif 'c4' in testcase_name:
         logprint(verbose, "Loading test set...")
         assert tokenizer is not None, "Tokenizer is required for C4-new"

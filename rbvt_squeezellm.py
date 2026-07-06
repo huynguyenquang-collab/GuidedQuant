@@ -16,6 +16,7 @@ from tqdm import tqdm
 
 from any_precision.analyzer import dispatch_model, get_analyzer
 from any_precision.quantization.pack import pack
+from any_precision.quantization.torch_load import torch_load
 
 
 @dataclass
@@ -311,8 +312,8 @@ def apply_rbvt_to_sqllm_cache(args, analyzer, means, variances):
             logging.info("Skipping completed RBVT layer cache: %s", output_weight_path)
             continue
 
-        layer_weights = torch.load(src / "weights" / f"l{layer_idx}.pt", map_location="cpu")
-        layer_luts = torch.load(src / f"lut_{args.bits}" / f"l{layer_idx}.pt", map_location="cpu")
+        layer_weights = torch_load(src / "weights" / f"l{layer_idx}.pt", map_location="cpu")
+        layer_luts = torch_load(src / f"lut_{args.bits}" / f"l{layer_idx}.pt", map_location="cpu")
         fp_weights = analyzer.get_layer_weights(layer_idx)
         out_layer = {}
         for module_name in analyzer.module_names:
@@ -392,13 +393,13 @@ def main():
 
     logging.info("Loading model/analyzer: %s", args.model)
     analyzer = get_analyzer(args.model, include_tokenizer=True)
-    tokens = normalize_tokens(torch.load(args.tokens_path, map_location="cpu"), args.seq_len)
+    tokens = normalize_tokens(torch_load(args.tokens_path, map_location="cpu"), args.seq_len)
     logging.info("Loaded calibration tokens: shape=%s", tuple(tokens.shape))
 
     stats_path = Path(args.stats_path)
     if stats_path.exists() and not args.overwrite_stats:
         logging.info("Loading cached RBVT activation stats: %s", stats_path)
-        payload = torch.load(stats_path, map_location="cpu")
+        payload = torch_load(stats_path, map_location="cpu")
         means = payload["means"]
         variances = payload["variances"]
     else:

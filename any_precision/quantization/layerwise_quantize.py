@@ -10,6 +10,7 @@ from typing import List, Tuple, Literal, Optional
 import time
 
 from .utils import get_progress_bar
+from .torch_load import torch_load
 
 @torch.no_grad()
 def objective_function(
@@ -370,11 +371,11 @@ def get_layer_loader(analyzer, module_names, initialization_path, hessians_path,
     def layer_loader(l):
         # Load the initialization data (labels and centroids)
         init_labels_file_name = os.path.join(initialization_path, "weights", f"l{l}.pt")
-        init_labels = torch.load(init_labels_file_name)
+        init_labels = torch_load(init_labels_file_name)
         init_centroids_file_name = os.path.join(initialization_path, f"lut_{seed_precision}", f"l{l}.pt")
-        init_centroids = torch.load(init_centroids_file_name)
+        init_centroids = torch_load(init_centroids_file_name)
         hessian_file_name = os.path.join(hessians_path, f"l{l}.pt")
-        hessian = torch.load(hessian_file_name)
+        hessian = torch_load(hessian_file_name)
 
         # Organize the data by module
         init_labels_layer = [
