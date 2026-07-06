@@ -1,5 +1,6 @@
 import os
 import torch
+import logging
 from transformers import AutoModelForCausalLM, PreTrainedModel, AutoTokenizer, PreTrainedTokenizerBase
 from .splitted_models import (
     get_splitted_gemma3_text_model,
@@ -19,11 +20,41 @@ def load_model(model_str_or_model, dtype=torch.float16):
         if not "llama" in model_str_or_model.lower():
             dtype = torch.bfloat16
 
-        model = AutoModelForCausalLM.from_pretrained(
-            model_str_or_model,
-            trust_remote_code=True,
-            torch_dtype=dtype,
-        )
+        kwargs = {
+            "trust_remote_code": True,
+            "torch_dtype": dtype,
+        }
+        attn_impl = os.environ.get("GUIDEDQUANT_ATTN_IMPLEMENTATION", "").strip()
+        if attn_impl:
+            kwargs["attn_implementation"] = attn_impl
+        try:
+            model = AutoModelForCausalLM.from_pretrained(model_str_or_model, **kwargs)
+        except Exception as exc:
+            if not attn_impl:
+                raise
+            logging.warning(
+                "Falling back from attn_implementation=%s because model loading failed: %s",
+                attn_impl,
+                exc,
+            )
+            kwargs.pop("attn_implementation", None)
+            fallback_impl = os.environ.get("GUIDEDQUANT_ATTN_FALLBACK", "sdpa").strip()
+            if fallback_impl:
+                try:
+                    model = AutoModelForCausalLM.from_pretrained(
+                        model_str_or_model,
+                        attn_implementation=fallback_impl,
+                        **kwargs,
+                    )
+                except Exception as fallback_exc:
+                    logging.warning(
+                        "Falling back from attn_implementation=%s because model loading failed: %s",
+                        fallback_impl,
+                        fallback_exc,
+                    )
+                    model = AutoModelForCausalLM.from_pretrained(model_str_or_model, **kwargs)
+            else:
+                model = AutoModelForCausalLM.from_pretrained(model_str_or_model, **kwargs)
     else:
         assert isinstance(model_str_or_model, PreTrainedModel), "model must be a string or a PreTrainedModel"
         model = model_str_or_model

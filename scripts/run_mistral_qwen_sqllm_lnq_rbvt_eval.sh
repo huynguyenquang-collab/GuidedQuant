@@ -47,7 +47,13 @@ RUN_QUANT="${RUN_QUANT:-1}"
 RUN_RBVT="${RUN_RBVT:-1}"
 RUN_REPO_EVAL="${RUN_REPO_EVAL:-1}"
 RUN_NONUQ_EVAL="${RUN_NONUQ_EVAL:-1}"
+OVERWRITE_QUANT="${OVERWRITE_QUANT:-0}"
+OVERWRITE_PACK="${OVERWRITE_PACK:-0}"
 OVERWRITE_RBVT_STATS="${OVERWRITE_RBVT_STATS:-1}"
+GUIDEDQUANT_GRADIENT_BATCH_SIZE="${GUIDEDQUANT_GRADIENT_BATCH_SIZE:-1}"
+GUIDEDQUANT_PARTIAL_GRADIENT_INTERVAL="${GUIDEDQUANT_PARTIAL_GRADIENT_INTERVAL:-64}"
+GUIDEDQUANT_LOSS_CHUNK_SIZE="${GUIDEDQUANT_LOSS_CHUNK_SIZE:-512}"
+GUIDEDQUANT_ATTN_IMPLEMENTATION="${GUIDEDQUANT_ATTN_IMPLEMENTATION:-sdpa}"
 
 # If no model-specific calibration token exists locally and no official token URL
 # is configured, build a reproducible cache from a RedPajama sample dataset.
@@ -65,6 +71,22 @@ export PYTHONPATH="${REPO_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
 export GUIDEDQUANT_CACHE_DEQUANT="${GUIDEDQUANT_CACHE_DEQUANT:-1}"
+export GUIDEDQUANT_GRADIENT_BATCH_SIZE
+export GUIDEDQUANT_PARTIAL_GRADIENT_INTERVAL
+export GUIDEDQUANT_LOSS_CHUNK_SIZE
+export GUIDEDQUANT_ATTN_IMPLEMENTATION
+export GUIDEDQUANT_RESUME_PARTIAL_GRADIENTS="${GUIDEDQUANT_RESUME_PARTIAL_GRADIENTS:-1}"
+
+overwrite_quant_pack_args() {
+  local args=()
+  if [[ "${OVERWRITE_QUANT}" == "1" ]]; then
+    args+=(--overwrite_quantize)
+  fi
+  if [[ "${OVERWRITE_PACK}" == "1" ]]; then
+    args+=(--overwrite_pack)
+  fi
+  printf '%s\n' "${args[@]}"
+}
 
 if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
   if [[ "${PYTHON_BIN}" == "python" ]] && command -v python3 >/dev/null 2>&1; then
@@ -233,7 +255,9 @@ clean_outputs() {
 
 run_squeezellm() {
   local model_name="$1"
-  log "Running SqueezeLLM: ${model_name}, ${BITS}-bit, RedPajama ${NUM_EXAMPLES}x${SEQ_LEN}"
+  local overwrite_args=()
+  mapfile -t overwrite_args < <(overwrite_quant_pack_args)
+  log "Running SqueezeLLM: ${model_name}, ${BITS}-bit, RedPajama ${NUM_EXAMPLES}x${SEQ_LEN}; grad_bs=${GUIDEDQUANT_GRADIENT_BATCH_SIZE}; attn=${GUIDEDQUANT_ATTN_IMPLEMENTATION}; overwrite_quant=${OVERWRITE_QUANT}; overwrite_pack=${OVERWRITE_PACK}"
   "${PYTHON_BIN}" quantize.py "${model_name}" \
     --seed_precision "${BITS}" \
     --parent_precision "${BITS}" \
@@ -241,13 +265,14 @@ run_squeezellm() {
     --dataset redpajama \
     --seq_len "${SEQ_LEN}" \
     --num_examples "${NUM_EXAMPLES}" \
-    --overwrite_quantize \
-    --overwrite_pack
+    "${overwrite_args[@]}"
   cleanup_cuda
 }
 
 run_lnq_plain() {
   local model_name="$1"
+  local overwrite_args=()
+  mapfile -t overwrite_args < <(overwrite_quant_pack_args)
   log "Running plain LNQ: ${model_name}, ${BITS}-bit, g=${LNQ_NUM_GROUPS}, T=${LNQ_NUM_ITERATIONS}, K=${LNQ_CD_CYCLES}"
   "${PYTHON_BIN}" layerwise_nuq.py "${model_name}" \
     --seed_precision "${BITS}" \
@@ -259,8 +284,7 @@ run_lnq_plain() {
     --num_iterations "${LNQ_NUM_ITERATIONS}" \
     --cd_cycles "${LNQ_CD_CYCLES}" \
     --is_nosal true \
-    --overwrite_quantize \
-    --overwrite_pack
+    "${overwrite_args[@]}"
   cleanup_cuda
 }
 
@@ -456,6 +480,7 @@ main() {
   log "Models: ${MODELS}"
   log "Config: bits=${BITS}, RedPajama ${NUM_EXAMPLES}x${SEQ_LEN}, LNQ g=${LNQ_NUM_GROUPS} iter=${LNQ_NUM_ITERATIONS} cd=${LNQ_CD_CYCLES}, repo_eval_ctx=${REPO_EVAL_CONTEXT}"
   log "RedPajama source: ${OFFICIAL_REDPJ_DATASET}${OFFICIAL_REDPJ_CONFIG:+/${OFFICIAL_REDPJ_CONFIG}}, split=${OFFICIAL_REDPJ_SPLIT}, streaming shuffle buffer=${OFFICIAL_REDPJ_SHUFFLE_BUFFER}"
+  log "Speed config: attn=${GUIDEDQUANT_ATTN_IMPLEMENTATION}, grad_bs=${GUIDEDQUANT_GRADIENT_BATCH_SIZE}, loss_chunk=${GUIDEDQUANT_LOSS_CHUNK_SIZE}, partial_interval=${GUIDEDQUANT_PARTIAL_GRADIENT_INTERVAL}, overwrite_quant=${OVERWRITE_QUANT}, overwrite_pack=${OVERWRITE_PACK}"
   for model in ${MODELS}; do
     run_model_job "${model}"
   done

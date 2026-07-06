@@ -10,6 +10,11 @@ from any_precision.analyzer.utils import get_target_cuda_device
 from .torch_load import torch_load
 
 
+def _truthy_env(name, default="0"):
+    value = os.environ.get(name, default).lower()
+    return value in {"1", "true", "yes", "on"}
+
+
 def _chunked_causal_lm_loss(logits, labels, chunk_size):
     shift_logits = logits[:, :-1, :]
     shift_labels = labels[:, 1:]
@@ -24,6 +29,31 @@ def _chunked_causal_lm_loss(logits, labels, chunk_size):
         loss = loss + F.cross_entropy(chunk_logits, chunk_labels, reduction="sum")
 
     return loss / token_count
+
+
+def _accumulate_weight_grads(analyzer, layers, gradient_accumulators):
+    for layer_idx, layer in enumerate(layers):
+        for module_name, module in analyzer.get_modules(layer).items():
+            if module.weight.grad is None:
+                continue
+
+            grad = module.weight.grad.detach().cpu().float()
+            if gradient_accumulators[layer_idx][module_name] is None:
+                gradient_accumulators[layer_idx][module_name] = grad
+            else:
+                gradient_accumulators[layer_idx][module_name].add_(grad)
+            module.weight.grad = None
+
+
+def _save_partial_gradients(partial_path, next_index, gradient_accumulators):
+    os.makedirs(os.path.dirname(partial_path), exist_ok=True)
+    torch.save(
+        {
+            "next_index": next_index,
+            "gradient_accumulators": gradient_accumulators,
+        },
+        partial_path,
+    )
 
 
 def get_gradients(
@@ -68,6 +98,8 @@ def get_gradients(
         logging.info(f"Gradients already calculated and saved at {save_path}.")
         logging.info(f"Loading cached gradients...")
         return torch_load(save_path)
+
+    partial_path = f"{save_path}.partial.pt" if save_path is not None else None
 
     logging.info(f"Calculating gradients on {len(input_tokens)} tokens...")
 
@@ -171,34 +203,70 @@ def get_gradients(
         for layer in layers
     ]
 
+    start_index = 0
+    if partial_path is not None and os.path.isfile(partial_path) and _truthy_env("GUIDEDQUANT_RESUME_PARTIAL_GRADIENTS", "1"):
+        partial = torch_load(partial_path, map_location="cpu")
+        start_index = int(partial.get("next_index", 0))
+        gradient_accumulators = partial["gradient_accumulators"]
+        logging.info("Resuming partial gradients from %s at sample index %d", partial_path, start_index)
+
     # ----------------------------------------------------------------
     # 5) Forward/backward pass over data
     # ----------------------------------------------------------------
     input_device = torch.device(get_target_cuda_device()) if forced_device is not None else model.device
     loss_chunk_size = int(os.environ.get("GUIDEDQUANT_LOSS_CHUNK_SIZE", "512"))
-    for tokens in tqdm(input_tokens, desc="Calculating gradients"):
-        tokens = tokens.to(input_device).unsqueeze(0)
+    gradient_batch_size = int(os.environ.get("GUIDEDQUANT_GRADIENT_BATCH_SIZE", "1"))
+    if saliency_path is not None and gradient_batch_size != 1:
+        logging.warning("Forcing GUIDEDQUANT_GRADIENT_BATCH_SIZE=1 because saliency hooks are enabled.")
+        gradient_batch_size = 1
+    gradient_batch_size = max(1, gradient_batch_size)
+    partial_interval = int(os.environ.get("GUIDEDQUANT_PARTIAL_GRADIENT_INTERVAL", "64"))
+    logging.info(
+        "Gradient loop config: batch_size=%d, loss_chunk_size=%d, partial_interval=%d",
+        gradient_batch_size,
+        loss_chunk_size,
+        partial_interval,
+    )
+
+    progress = tqdm(range(start_index, len(input_tokens), gradient_batch_size), desc="Calculating gradients")
+    for batch_start in progress:
+        batch_end = min(batch_start + gradient_batch_size, len(input_tokens))
+        token_batch = torch.stack(
+            [input_tokens[i].to(input_device) for i in range(batch_start, batch_end)],
+            dim=0,
+        )
+
         if loss_chunk_size > 0:
-            outputs = model(input_ids=tokens, use_cache=False)
-            loss = _chunked_causal_lm_loss(outputs.logits, tokens, loss_chunk_size)
+            outputs = model(input_ids=token_batch, use_cache=False)
+            for row_idx in range(token_batch.shape[0]):
+                loss = _chunked_causal_lm_loss(
+                    outputs.logits[row_idx : row_idx + 1],
+                    token_batch[row_idx : row_idx + 1],
+                    loss_chunk_size,
+                )
+                loss.backward(retain_graph=row_idx < token_batch.shape[0] - 1)
+                _accumulate_weight_grads(analyzer, layers, gradient_accumulators)
+                del loss
         else:
-            outputs = model(input_ids=tokens, labels=tokens)
-            loss = outputs.loss
-        loss.backward()
+            outputs = model(input_ids=token_batch, use_cache=False)
+            for row_idx in range(token_batch.shape[0]):
+                loss = F.cross_entropy(
+                    outputs.logits[row_idx : row_idx + 1, :-1, :].reshape(-1, outputs.logits.shape[-1]),
+                    token_batch[row_idx : row_idx + 1, 1:].reshape(-1),
+                    reduction="mean",
+                )
+                loss.backward(retain_graph=row_idx < token_batch.shape[0] - 1)
+                _accumulate_weight_grads(analyzer, layers, gradient_accumulators)
+                del loss
 
-        for layer_idx, layer in enumerate(layers):
-            for module_name, module in analyzer.get_modules(layer).items():
-                if module.weight.grad is None:
-                    continue
+        next_index = batch_end
+        if partial_path is not None and not skip_save_gradients and partial_interval > 0 and (
+            next_index % partial_interval == 0 or next_index == len(input_tokens)
+        ):
+            logging.info("Saving partial gradients to %s at sample index %d", partial_path, next_index)
+            _save_partial_gradients(partial_path, next_index, gradient_accumulators)
 
-                grad = module.weight.grad.detach().cpu().float()
-                if gradient_accumulators[layer_idx][module_name] is None:
-                    gradient_accumulators[layer_idx][module_name] = grad
-                else:
-                    gradient_accumulators[layer_idx][module_name].add_(grad)
-                module.weight.grad = None
-
-        del outputs, loss, tokens
+        del outputs, token_batch
         torch.cuda.empty_cache()
 
     # ----------------------------------------------------------------
@@ -268,6 +336,10 @@ def get_gradients(
         logging.info(f"Saving gradients to {save_path}...")
         if not save_path.endswith('.pt'):
             save_path = save_path + '.pt'
+        final_partial_path = f"{save_path}.partial.pt"
+        if os.path.exists(final_partial_path):
+            logging.info("Removing partial gradient checkpoint before final save: %s", final_partial_path)
+            os.remove(final_partial_path)
         if os.path.exists(save_path):
             input(f"[WARNING] File {save_path} already exists. "
                   "Press Enter to overwrite or Ctrl+C to cancel.")
