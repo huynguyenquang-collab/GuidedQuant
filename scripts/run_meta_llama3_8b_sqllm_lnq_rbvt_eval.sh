@@ -30,6 +30,8 @@ REPO_EVAL_CONTEXT="${REPO_EVAL_CONTEXT:-8192}"
 NONUQ_MAX_LENGTH="${NONUQ_MAX_LENGTH:-2048}"
 NONUQ_STRIDE="${NONUQ_STRIDE:-512}"
 NONUQ_C4_SAMPLES="${NONUQ_C4_SAMPLES:-2000}"
+NONUQ_BATCH_SIZE="${NONUQ_BATCH_SIZE:-4}"
+NONUQ_EVAL_MODE="${NONUQ_EVAL_MODE:-sliding}"
 
 CLEAN_OUTPUTS="${CLEAN_OUTPUTS:-1}"
 RUN_QUANT="${RUN_QUANT:-1}"
@@ -41,6 +43,7 @@ OVERWRITE_RBVT_STATS="${OVERWRITE_RBVT_STATS:-1}"
 export PYTHONPATH="${REPO_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
+export GUIDEDQUANT_CACHE_DEQUANT="${GUIDEDQUANT_CACHE_DEQUANT:-1}"
 
 if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
   if [[ "${PYTHON_BIN}" == "python" ]] && command -v python3 >/dev/null 2>&1; then
@@ -262,6 +265,8 @@ run_nonuq_eval() {
     --precision "${BITS}" \
     --max-length "${NONUQ_MAX_LENGTH}" \
     --stride "${NONUQ_STRIDE}" \
+    --batch-size "${NONUQ_BATCH_SIZE}" \
+    --eval-mode "${NONUQ_EVAL_MODE}" \
     --c4-samples "${NONUQ_C4_SAMPLES}" \
     --output-file "${NONUQ_OUTPUT_DIR}/squeezellm.json"
   cleanup_cuda
@@ -274,6 +279,8 @@ run_nonuq_eval() {
     --precision "${BITS}" \
     --max-length "${NONUQ_MAX_LENGTH}" \
     --stride "${NONUQ_STRIDE}" \
+    --batch-size "${NONUQ_BATCH_SIZE}" \
+    --eval-mode "${NONUQ_EVAL_MODE}" \
     --c4-samples "${NONUQ_C4_SAMPLES}" \
     --output-file "${NONUQ_OUTPUT_DIR}/lnq_plain.json"
   cleanup_cuda
@@ -286,6 +293,8 @@ run_nonuq_eval() {
     --precision "${BITS}" \
     --max-length "${NONUQ_MAX_LENGTH}" \
     --stride "${NONUQ_STRIDE}" \
+    --batch-size "${NONUQ_BATCH_SIZE}" \
+    --eval-mode "${NONUQ_EVAL_MODE}" \
     --c4-samples "${NONUQ_C4_SAMPLES}" \
     --output-file "${NONUQ_OUTPUT_DIR}/rbvt_squeezellm.json"
 }

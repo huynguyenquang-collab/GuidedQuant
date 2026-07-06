@@ -39,6 +39,8 @@ REPO_EVAL_CONTEXT="${REPO_EVAL_CONTEXT:-4096}"
 NONUQ_MAX_LENGTH="${NONUQ_MAX_LENGTH:-2048}"
 NONUQ_STRIDE="${NONUQ_STRIDE:-512}"
 NONUQ_C4_SAMPLES="${NONUQ_C4_SAMPLES:-2000}"
+NONUQ_BATCH_SIZE="${NONUQ_BATCH_SIZE:-4}"
+NONUQ_EVAL_MODE="${NONUQ_EVAL_MODE:-sliding}"
 
 CLEAN_OUTPUTS="${CLEAN_OUTPUTS:-1}"
 RUN_QUANT="${RUN_QUANT:-1}"
@@ -62,6 +64,7 @@ TRUST_EXISTING_CALIB="${TRUST_EXISTING_CALIB:-1}"
 export PYTHONPATH="${REPO_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
+export GUIDEDQUANT_CACHE_DEQUANT="${GUIDEDQUANT_CACHE_DEQUANT:-1}"
 
 if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
   if [[ "${PYTHON_BIN}" == "python" ]] && command -v python3 >/dev/null 2>&1; then
@@ -361,6 +364,8 @@ run_nonuq_eval_one() {
     --precision "${BITS}" \
     --max-length "${NONUQ_MAX_LENGTH}" \
     --stride "${NONUQ_STRIDE}" \
+    --batch-size "${NONUQ_BATCH_SIZE}" \
+    --eval-mode "${NONUQ_EVAL_MODE}" \
     --c4-samples "${NONUQ_C4_SAMPLES}" \
     --output-file "${output_file}"
   cleanup_cuda

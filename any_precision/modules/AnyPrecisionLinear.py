@@ -107,7 +107,7 @@ class AnyPrecisionLinear(nn.Module):
         else:
             w_bits = self.precision
 
-        if ap_gemv is None:
+        if ap_gemv is None or (x.numel() // x.shape[-1] > 1 and self._should_cache_dequant_weight()):
             weight = self._dequant_weight_fallback(w_bits).to(x.dtype)
             x = torch.matmul(x, weight.T)
         elif x.numel() // x.shape[-1] > 1:

@@ -32,6 +32,8 @@ NONUQ_STRIDE="${NONUQ_STRIDE:-512}"
 NONUQ_C4_SAMPLES="${NONUQ_C4_SAMPLES:-2000}"
 NONUQ_DTYPE="${NONUQ_DTYPE:-float16}"
 NONUQ_DEVICE="${NONUQ_DEVICE:-cuda}"
+NONUQ_BATCH_SIZE="${NONUQ_BATCH_SIZE:-4}"
+NONUQ_EVAL_MODE="${NONUQ_EVAL_MODE:-sliding}"
 
 RUN_SQLLM="${RUN_SQLLM:-1}"
 RUN_LNQ="${RUN_LNQ:-1}"
@@ -46,6 +48,7 @@ MODEL_SPECS="${MODEL_SPECS:-llama2_7b=meta-llama/Llama-2-7b-hf;llama3_8b=meta-ll
 export PYTHONPATH="${REPO_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
+export GUIDEDQUANT_CACHE_DEQUANT="${GUIDEDQUANT_CACHE_DEQUANT:-1}"
 
 log() {
   local job="$1"
@@ -97,7 +100,7 @@ run_one_model() {
 
   local nonuq_output_dir="outputs/${label}_sqllm_lnq_rbvt_c4_s${NUM_EXAMPLES}_blk${SEQ_LEN}_${BITS}bit_nonuq"
 
-  log "${job}" "model=${model_name}; calib=${DATASET} n=${NUM_EXAMPLES} seqlen=${SEQ_LEN}; eval=nonuquantfix"
+  log "${job}" "model=${model_name}; calib=${DATASET} n=${NUM_EXAMPLES} seqlen=${SEQ_LEN}; eval=nonuquantfix mode=${NONUQ_EVAL_MODE} bs=${NONUQ_BATCH_SIZE} cache_dequant=${GUIDEDQUANT_CACHE_DEQUANT}"
 
   if [[ "${CLEAN_OUTPUTS}" == "1" ]]; then
     log "${job}" "Cleaning generated artifacts for this job"
@@ -208,6 +211,8 @@ run_one_model() {
       --device "${NONUQ_DEVICE}" \
       --max-length "${NONUQ_MAX_LENGTH}" \
       --stride "${NONUQ_STRIDE}" \
+      --batch-size "${NONUQ_BATCH_SIZE}" \
+      --eval-mode "${NONUQ_EVAL_MODE}" \
       --c4-samples "${NONUQ_C4_SAMPLES}" \
       --output-file "${nonuq_output_dir}/squeezellm.json"
     cleanup_cuda
@@ -223,6 +228,8 @@ run_one_model() {
       --device "${NONUQ_DEVICE}" \
       --max-length "${NONUQ_MAX_LENGTH}" \
       --stride "${NONUQ_STRIDE}" \
+      --batch-size "${NONUQ_BATCH_SIZE}" \
+      --eval-mode "${NONUQ_EVAL_MODE}" \
       --c4-samples "${NONUQ_C4_SAMPLES}" \
       --output-file "${nonuq_output_dir}/lnq_plain.json"
     cleanup_cuda
@@ -238,6 +245,8 @@ run_one_model() {
       --device "${NONUQ_DEVICE}" \
       --max-length "${NONUQ_MAX_LENGTH}" \
       --stride "${NONUQ_STRIDE}" \
+      --batch-size "${NONUQ_BATCH_SIZE}" \
+      --eval-mode "${NONUQ_EVAL_MODE}" \
       --c4-samples "${NONUQ_C4_SAMPLES}" \
       --output-file "${nonuq_output_dir}/rbvt_squeezellm.json"
     cleanup_cuda

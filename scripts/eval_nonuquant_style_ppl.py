@@ -97,10 +97,24 @@ def _load_c4(cache_dir: Path, seed: int, n_samples: int, token: str | None):
 
 
 @torch.no_grad()
-def evaluate_sliding_window(model, tokenizer, texts, device: str, max_length: int, stride: int, limit_tokens: int | None):
+def evaluate_sliding_window(
+    model,
+    tokenizer,
+    texts,
+    device: str,
+    max_length: int,
+    stride: int,
+    limit_tokens: int | None,
+    batch_size: int,
+):
     model.eval()
-    nlls = []
+    total_nll = torch.zeros((), device=device, dtype=torch.float32)
     total_tokens = 0
+    total_eval_tokens = 0
+    loss_fct = torch.nn.CrossEntropyLoss(ignore_index=-100, reduction="sum")
+    pad_token_id = tokenizer.pad_token_id
+    if pad_token_id is None:
+        pad_token_id = tokenizer.eos_token_id if tokenizer.eos_token_id is not None else 0
 
     for text in texts:
         input_ids = tokenizer(text, return_tensors="pt", add_special_tokens=False).input_ids
@@ -118,37 +132,106 @@ def evaluate_sliding_window(model, tokenizer, texts, device: str, max_length: in
             continue
 
         prev_end_loc = 0
-        window_range = range(0, seq_len, stride)
-        pbar = tqdm(window_range, desc=f"Windows ({seq_len:,} toks)", unit="win", leave=False)
-
-        for begin_loc in pbar:
+        windows = []
+        for begin_loc in range(0, seq_len, stride):
             end_loc = min(begin_loc + max_length, seq_len)
             trg_len = end_loc - prev_end_loc
-            input_chunk = input_ids[:, begin_loc:end_loc]
-            target_chunk = input_chunk.clone()
-            if begin_loc > 0:
-                target_chunk[:, :-trg_len] = -100
-
-            outputs = model(input_chunk, labels=target_chunk)
-            nlls.append(outputs.loss * trg_len)
+            windows.append((begin_loc, end_loc, trg_len))
             prev_end_loc = end_loc
-
-            current_nll = torch.stack(nlls).sum()
-            current_ppl = torch.exp(current_nll / (total_tokens + prev_end_loc)).item()
-            pbar.set_postfix({"PPL": f"{current_ppl:.4f}", "tokens": f"{total_tokens + prev_end_loc:,}"})
-
             if end_loc == seq_len:
                 break
 
+        pbar = tqdm(range(0, len(windows), batch_size), desc=f"Windows ({seq_len:,} toks)", unit="batch", leave=False)
+        for start in pbar:
+            batch_windows = windows[start : start + batch_size]
+            batch_input = torch.full((len(batch_windows), max_length), pad_token_id, dtype=input_ids.dtype, device=device)
+            batch_labels = torch.full_like(batch_input, -100)
+            batch_attention = torch.zeros_like(batch_input)
+
+            for row, (begin_loc, end_loc, trg_len) in enumerate(batch_windows):
+                input_chunk = input_ids[:, begin_loc:end_loc]
+                chunk_len = input_chunk.size(1)
+                batch_input[row, :chunk_len] = input_chunk[0]
+                batch_attention[row, :chunk_len] = 1
+                target_chunk = input_chunk.clone()
+                if begin_loc > 0:
+                    target_chunk[:, :-trg_len] = -100
+                batch_labels[row, :chunk_len] = target_chunk[0]
+
+            outputs = model(batch_input, attention_mask=batch_attention, use_cache=False)
+            shift_logits = outputs.logits[:, :-1, :].contiguous()
+            shift_labels = batch_labels[:, 1:].contiguous()
+            loss_sum = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+            label_count = shift_labels.ne(-100).sum()
+            total_nll += loss_sum.float()
+            total_eval_tokens += int(label_count.item())
+
+            denom = max(total_eval_tokens, 1)
+            current_ppl = torch.exp(total_nll / denom).item()
+            pbar.set_postfix({"PPL": f"{current_ppl:.4f}", "tokens": f"{total_tokens + batch_windows[-1][1]:,}"})
+
         total_tokens += seq_len
 
-    if not nlls:
+    if total_eval_tokens == 0:
         raise RuntimeError("No valid tokens were evaluated.")
 
-    total_nll = torch.stack(nlls).sum()
     return {
-        "perplexity": torch.exp(total_nll / total_tokens).item(),
+        "perplexity": torch.exp(total_nll / total_eval_tokens).item(),
         "total_tokens": total_tokens,
+        "eval_tokens": total_eval_tokens,
+    }
+
+
+@torch.no_grad()
+def evaluate_chunked(model, tokenizer, texts, device: str, max_length: int, limit_tokens: int | None, batch_size: int):
+    model.eval()
+    total_nll = torch.zeros((), device=device, dtype=torch.float32)
+    total_tokens = 0
+    total_eval_tokens = 0
+    loss_fct = torch.nn.CrossEntropyLoss(ignore_index=-100, reduction="sum")
+    pad_token_id = tokenizer.pad_token_id
+    if pad_token_id is None:
+        pad_token_id = tokenizer.eos_token_id if tokenizer.eos_token_id is not None else 0
+
+    for text in texts:
+        input_ids = tokenizer(text, return_tensors="pt", add_special_tokens=False).input_ids
+        if tokenizer.bos_token_id is not None:
+            if input_ids.shape[1] == 0 or input_ids[0, 0].item() != tokenizer.bos_token_id:
+                bos = torch.tensor([[tokenizer.bos_token_id]], device=input_ids.device)
+                input_ids = torch.cat([bos, input_ids], dim=1)
+
+        if limit_tokens is not None and input_ids.size(1) > limit_tokens:
+            input_ids = input_ids[:, :limit_tokens]
+
+        input_ids = input_ids.to(device)
+        seq_len = input_ids.size(1)
+        nsamples = seq_len // max_length
+        if nsamples == 0:
+            continue
+
+        chunks = input_ids[:, : nsamples * max_length].view(nsamples, max_length)
+        pbar = tqdm(range(0, nsamples, batch_size), desc=f"Chunks ({seq_len:,} toks)", unit="batch", leave=False)
+        for start in pbar:
+            batch_input = chunks[start : start + batch_size]
+            batch_attention = torch.ones_like(batch_input)
+            outputs = model(batch_input, attention_mask=batch_attention, use_cache=False)
+            shift_logits = outputs.logits[:, :-1, :].contiguous()
+            shift_labels = batch_input[:, 1:].contiguous()
+            loss_sum = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+            label_count = shift_labels.numel()
+            total_nll += loss_sum.float()
+            total_eval_tokens += int(label_count)
+            pbar.set_postfix({"PPL": f"{torch.exp(total_nll / total_eval_tokens).item():.4f}", "tokens": f"{total_tokens + (start + batch_input.size(0)) * max_length:,}"})
+
+        total_tokens += nsamples * max_length
+
+    if total_eval_tokens == 0:
+        raise RuntimeError("No valid tokens were evaluated.")
+
+    return {
+        "perplexity": torch.exp(total_nll / total_eval_tokens).item(),
+        "total_tokens": total_tokens,
+        "eval_tokens": total_eval_tokens,
     }
 
 
@@ -165,6 +248,13 @@ def main():
     parser.add_argument("--precision", type=int, default=3)
     parser.add_argument("--stride", type=int, default=512)
     parser.add_argument("--max-length", type=int, default=2048)
+    parser.add_argument("--batch-size", type=int, default=1)
+    parser.add_argument(
+        "--eval-mode",
+        default="sliding",
+        choices=["sliding", "chunks"],
+        help="sliding keeps NonUQuantFix window/stride; chunks matches SqueezeLLM/GPTQ non-overlap eval.",
+    )
     parser.add_argument("--c4-samples", type=int, default=2000)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--cache-dir", default="./dataset_cache_nonuquant")
@@ -193,16 +283,28 @@ def main():
             else:
                 texts = _load_c4(cache_dir, args.seed, args.c4_samples, args.hf_token)
 
-            print(f"\nEvaluating {args.model_name or Path(args.model_path).name} on {dataset_name}")
-            results[dataset_name] = evaluate_sliding_window(
-                model=model,
-                tokenizer=tokenizer,
-                texts=texts,
-                device=args.device,
-                max_length=args.max_length,
-                stride=args.stride,
-                limit_tokens=args.limit_tokens or None,
-            )
+            print(f"\nEvaluating {args.model_name or Path(args.model_path).name} on {dataset_name} ({args.eval_mode})")
+            if args.eval_mode == "chunks":
+                results[dataset_name] = evaluate_chunked(
+                    model=model,
+                    tokenizer=tokenizer,
+                    texts=texts,
+                    device=args.device,
+                    max_length=args.max_length,
+                    limit_tokens=args.limit_tokens or None,
+                    batch_size=args.batch_size,
+                )
+            else:
+                results[dataset_name] = evaluate_sliding_window(
+                    model=model,
+                    tokenizer=tokenizer,
+                    texts=texts,
+                    device=args.device,
+                    max_length=args.max_length,
+                    stride=args.stride,
+                    limit_tokens=args.limit_tokens or None,
+                    batch_size=args.batch_size,
+                )
             print(
                 f"{dataset_name}: ppl={results[dataset_name]['perplexity']:.6f} "
                 f"tokens={results[dataset_name]['total_tokens']:,}"
@@ -218,6 +320,8 @@ def main():
         "model_path": args.model_path,
         "model_name": args.model_name or Path(args.model_path).name,
         "precision": args.precision,
+        "eval_mode": args.eval_mode,
+        "batch_size": args.batch_size,
         "stride": args.stride,
         "max_length": args.max_length,
         "c4_samples": args.c4_samples,
