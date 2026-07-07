@@ -8,6 +8,17 @@ from concurrent.futures import ThreadPoolExecutor
 import flash1dkmeans
 
 
+def _atomic_torch_save(obj, path):
+    tmp_path = f"{path}.tmp.{os.getpid()}"
+    try:
+        torch.save(obj, tmp_path)
+        os.replace(tmp_path, path)
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
+
+
 @numba.njit(cache=True)
 def _upscale_group(orig_centroids,
                    orig_cluster_borders, weights,
@@ -216,14 +227,14 @@ def _save_results(parent_parameters_path, seed_precision, parent_precision, modu
         lut_dict = {}
         for j in range(len(module_names)):
             lut_dict[module_names[j]] = luts_by_bit_by_module[j][i].astype(np.float16)
-        torch.save(lut_dict, output_lut_file_name)
+        _atomic_torch_save(lut_dict, output_lut_file_name)
 
     parent_weight_dict = {module_names[j]: parent_weights[j].astype(np.uint8)
                           for j in range(len(module_names))}
 
     output_weights_layer_file_name = f"{parent_parameters_path}/weights/l{l}.pt"
     os.makedirs(os.path.dirname(output_weights_layer_file_name), exist_ok=True)
-    torch.save(parent_weight_dict, output_weights_layer_file_name)
+    _atomic_torch_save(parent_weight_dict, output_weights_layer_file_name)
 
 
 def _get_saver(parent_parameters_path, seed_precision, parent_precision, module_names):
@@ -240,10 +251,24 @@ def _load_progress(parent_parameters_path, seed_precision, parent_precision, lay
     # Check if the layer has already been processed
     todo_ran = []
     processed_ran = []
+    validate_cache = os.environ.get("GUIDEDQUANT_VALIDATE_QUANT_CACHE", "1").lower() in {"1", "true", "yes", "on"}
     for l in range(layer_count):
-        if all([os.path.exists(f"{parent_parameters_path}/lut_{bit}/l{l}.pt")
-                for bit in range(seed_precision, parent_precision + 1)]) and \
-                os.path.exists(f"{parent_parameters_path}/weights/l{l}.pt"):
+        layer_files = [
+            f"{parent_parameters_path}/lut_{bit}/l{l}.pt"
+            for bit in range(seed_precision, parent_precision + 1)
+        ]
+        layer_files.append(f"{parent_parameters_path}/weights/l{l}.pt")
+        complete = all(os.path.exists(path) for path in layer_files)
+        if complete and validate_cache:
+            for path in layer_files:
+                try:
+                    torch.load(path, map_location="cpu", weights_only=False)
+                except Exception as exc:
+                    logging.warning("Ignoring corrupt quantization cache for layer %d: %s (%s)", l, path, exc)
+                    complete = False
+                    break
+
+        if complete:
             processed_ran.append(l)
         else:
             todo_ran.append(l)
