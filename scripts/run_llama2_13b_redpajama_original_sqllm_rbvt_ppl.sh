@@ -585,7 +585,27 @@ missing_layer_bounds() {
   fi
 }
 
+model_layer_count() {
+  "${PYTHON_BIN}" - "${MODEL}" <<'PY'
+import sys
+from transformers import AutoConfig
+
+config = AutoConfig.from_pretrained(sys.argv[1], trust_remote_code=True)
+count = getattr(config, "num_hidden_layers", None)
+if count is None:
+    count = getattr(config, "n_layer", None)
+if count is None:
+    raise SystemExit("Cannot infer model layer count from config.")
+print(int(count))
+PY
+}
+
 SQ_LUT_COUNT="$(count_files "${SQ_DIR}/lut" 'l*.pkl')"
+EXPECTED_LAYER_COUNT="${EXPECTED_LAYER_COUNT:-}"
+if [[ -z "${EXPECTED_LAYER_COUNT}" ]]; then
+  EXPECTED_LAYER_COUNT="$(model_layer_count)"
+fi
+CHUNK_COUNT="$(count_files "${CHUNK_DIR}" 'layer_*.pt')"
 NEEDS_LNQ_OR_RBVT=0
 if has_word "lnq_plain" "${PPL_TARGETS}" || has_word "rbvt_squeeze" "${PPL_TARGETS}"; then
   NEEDS_LNQ_OR_RBVT=1
@@ -597,17 +617,23 @@ fi
 
 if [[ "${SQUEEZE_EVAL_ONLY}" == "1" && "${SQ_LUT_COUNT}" -gt 0 ]]; then
   log "SqueezeLLM eval-only: reusing ${SQ_LUT_COUNT} LUT layers in ${SQ_DIR}/lut; skipping model chunks/Fisher"
-elif [[ -d "${CHUNK_DIR}" && "$(count_files "${CHUNK_DIR}" 'layer_*.pt')" -gt 0 ]]; then
-  log "Reusing existing model chunks in ${CHUNK_DIR}"
+elif [[ "${CHUNK_COUNT}" -ge "${EXPECTED_LAYER_COUNT}" ]]; then
+  log "Reusing existing model chunks in ${CHUNK_DIR} (${CHUNK_COUNT}/${EXPECTED_LAYER_COUNT})"
 else
-  log "Chunking model: ${MODEL}"
+  log "Chunking/resuming model: ${MODEL} (${CHUNK_COUNT}/${EXPECTED_LAYER_COUNT} chunks present)"
   "${PYTHON_BIN}" quantization/chunk_models.py \
     --model "${MODEL}" \
     --model_type "${MODEL_TYPE}" \
     --output_path "${CHUNK_DIR}"
 fi
 
-LAYER_COUNT="$(count_files "${CHUNK_DIR}" 'layer_*.pt')"
+CHUNK_COUNT="$(count_files "${CHUNK_DIR}" 'layer_*.pt')"
+if [[ "${SQUEEZE_EVAL_ONLY}" != "1" && "${CHUNK_COUNT}" -lt "${EXPECTED_LAYER_COUNT}" ]]; then
+  echo "Model chunks incomplete after chunking: ${CHUNK_COUNT}/${EXPECTED_LAYER_COUNT} in ${CHUNK_DIR}" >&2
+  exit 1
+fi
+
+LAYER_COUNT="${EXPECTED_LAYER_COUNT}"
 if [[ "${LAYER_COUNT}" -lt 1 && "${SQ_LUT_COUNT}" -gt 0 ]]; then
   LAYER_COUNT="${SQ_LUT_COUNT}"
 fi
