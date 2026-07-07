@@ -12,11 +12,16 @@ cd "${REPO_ROOT}"
 # - 3-bit SqueezeLLM, plain LNQ (--is_nosal true), and RBVT-SqueezeLLM
 # - PPL eval on WikiText2 and C4 using both repo-style and NonUQuant-style paths
 declare -A MODEL_ALIASES=(
+  [Llama2_7B]="meta-llama/Llama-2-7b-hf"
+  [Llama2_13B]="meta-llama/Llama-2-13b-hf"
   [Mistral7Bv03]="mistralai/Mistral-7B-v0.3"
   [Qwen25_7B]="Qwen/Qwen2.5-7B"
   [Qwen3_8B]="Qwen/Qwen3-8B"
 )
 
+if [[ -n "${MODEL_LIST:-}" && -z "${MODELS:-}" ]]; then
+  MODELS="${MODEL_LIST}"
+fi
 MODELS="${MODELS:-Mistral7Bv03 Qwen25_7B}"
 BITS="${BITS:-3}"
 SEQ_LEN="${SEQ_LEN:-4096}"
@@ -47,6 +52,7 @@ RUN_QUANT="${RUN_QUANT:-1}"
 RUN_RBVT="${RUN_RBVT:-1}"
 RUN_REPO_EVAL="${RUN_REPO_EVAL:-1}"
 RUN_NONUQ_EVAL="${RUN_NONUQ_EVAL:-1}"
+PPL_TARGETS="${PPL_TARGETS:-squeezellm lnq_plain rbvt_squeezellm}"
 OVERWRITE_QUANT="${OVERWRITE_QUANT:-0}"
 OVERWRITE_PACK="${OVERWRITE_PACK:-0}"
 OVERWRITE_RBVT_STATS="${OVERWRITE_RBVT_STATS:-1}"
@@ -410,9 +416,23 @@ run_nonuq_eval() {
 
   log "Running NonUQuantFix-style sliding-window PPL eval"
   mkdir -p "${output_dir}"
-  run_nonuq_eval_one "${sqllm_packed_path}" "squeezellm_${basename}" "${model_name}" "${output_dir}/squeezellm.json"
-  run_nonuq_eval_one "${lnq_packed_path}" "lnq_plain_${basename}" "${model_name}" "${output_dir}/lnq_plain.json"
-  run_nonuq_eval_one "${rbvt_packed_path}" "rbvt_sqllm_${basename}" "${model_name}" "${output_dir}/rbvt_squeezellm.json"
+  for target in ${PPL_TARGETS}; do
+    case "${target}" in
+      squeezellm)
+        run_nonuq_eval_one "${sqllm_packed_path}" "squeezellm_${basename}" "${model_name}" "${output_dir}/squeezellm.json"
+        ;;
+      lnq_plain|lnq)
+        run_nonuq_eval_one "${lnq_packed_path}" "lnq_plain_${basename}" "${model_name}" "${output_dir}/lnq_plain.json"
+        ;;
+      rbvt_squeezellm|rbvt_sqllm|rbvt)
+        run_nonuq_eval_one "${rbvt_packed_path}" "rbvt_sqllm_${basename}" "${model_name}" "${output_dir}/rbvt_squeezellm.json"
+        ;;
+      *)
+        echo "Unknown PPL target: ${target}" >&2
+        exit 1
+        ;;
+    esac
+  done
 }
 
 run_model_job() {
