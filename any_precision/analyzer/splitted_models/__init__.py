@@ -3,6 +3,11 @@ def get_splitted_llama_model():
     return SplittedLlamaModel
 
 
+def get_splitted_mistral_model():
+    from .mistral import SplittedMistralModel
+    return SplittedMistralModel
+
+
 def get_splitted_qwen3_model():
     from .qwen3 import SplittedQwen3Model
     return SplittedQwen3Model

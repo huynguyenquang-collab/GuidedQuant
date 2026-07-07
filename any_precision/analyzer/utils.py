@@ -5,6 +5,7 @@ from transformers import AutoModelForCausalLM, PreTrainedModel, AutoTokenizer, P
 from .splitted_models import (
     get_splitted_gemma3_text_model,
     get_splitted_llama_model,
+    get_splitted_mistral_model,
     get_splitted_qwen3_model,
 )
 
@@ -16,8 +17,10 @@ def get_target_cuda_device():
 def load_model(model_str_or_model, dtype=torch.float16):
     """Returns a model from a string or a model object. If a string is passed, it will be loaded from the HuggingFace"""
     if isinstance(model_str_or_model, str):
-        # Qwen / Gemma models are more stable in bfloat16
-        if not "llama" in model_str_or_model.lower():
+        # Qwen / Gemma models are more stable in bfloat16; LLaMA/Mistral paths
+        # use fp16 to match the original GuidedQuant kernels and cache layout.
+        model_name = model_str_or_model.lower()
+        if not any(name in model_name for name in ("llama", "mistral")):
             dtype = torch.bfloat16
 
         kwargs = {
@@ -66,6 +69,13 @@ def dispatch_model(model):
     if model.config.architectures[0] == 'LlamaForCausalLM':
         SplittedLlamaModel = get_splitted_llama_model()
         model.model.__class__ = SplittedLlamaModel
+        model.model.config.use_cache = False
+        model.model.set_devices()
+        model.lm_head.to(target_device)
+        return model
+    elif model.config.architectures[0] == 'MistralForCausalLM':
+        SplittedMistralModel = get_splitted_mistral_model()
+        model.model.__class__ = SplittedMistralModel
         model.model.config.use_cache = False
         model.model.set_devices()
         model.lm_head.to(target_device)
