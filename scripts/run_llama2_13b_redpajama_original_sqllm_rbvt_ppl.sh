@@ -132,7 +132,11 @@ if [[ "${RBVT_MSE_GUARD}" == "1" || "${RBVT_MSE_GUARD}" == "true" || "${RBVT_MSE
   RBVT_MSE_GUARD_ARGS=(--rbvt_mse_guard)
 fi
 
-LEGACY_CALIB_TOKENS="${LEGACY_CALIB_TOKENS:-cache/tokens/Llama-2-13b-hf-redpajama_s1024_blk4096.pt}"
+if [[ -z "${LEGACY_CALIB_TOKENS+x}" && "${DATASET}" == "redpajama" ]]; then
+  LEGACY_CALIB_TOKENS="cache/tokens/Llama-2-13b-hf-redpajama_s1024_blk4096.pt"
+else
+  LEGACY_CALIB_TOKENS="${LEGACY_CALIB_TOKENS:-}"
+fi
 if [[ -z "${CALIB_TOKENS_PATH:-}" && -s "${LEGACY_CALIB_TOKENS}" ]]; then
   export CALIB_TOKENS_PATH="${LEGACY_CALIB_TOKENS}"
   log "Using existing online calibration token cache: ${CALIB_TOKENS_PATH}"
