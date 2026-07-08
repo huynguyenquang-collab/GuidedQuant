@@ -117,7 +117,13 @@ FISHER_DIR="${OUTPUT_ROOT}/fisher_${DATASET}_s${NSAMPLES}_blk${SEQLEN}"
 SQ_DIR="${OUTPUT_ROOT}/squeezellm_w${BIT}"
 HESSIAN_DIR="${OUTPUT_ROOT}/lnq_hessians_${DATASET}_s${NSAMPLES}_blk${SEQLEN}"
 LNQ_DIR="${OUTPUT_ROOT}/lnq_plain_w${BIT}_${DATASET}_s${NSAMPLES}_blk${SEQLEN}_iter${LNQ_ITERATIONS}_cd${LNQ_CD_CYCLES}"
-RBVT_DIR="${RBVT_DIR:-${OUTPUT_ROOT}/rbvt_guard_p002_t05_l5}"
+if [[ -z "${RBVT_DIR+x}" ]]; then
+  if [[ "${RBVT_MSE_GUARD}" == "1" || "${RBVT_MSE_GUARD}" == "true" || "${RBVT_MSE_GUARD}" == "TRUE" || "${RBVT_BUDGET_P}" != "1.0" || "${RBVT_TARGET_RATIO}" != "1.0" ]]; then
+    RBVT_DIR="${OUTPUT_ROOT}/rbvt_guard_p002_t05_l5"
+  else
+    RBVT_DIR="${OUTPUT_ROOT}/rbvt_squeeze_w${BIT}_lambda${RBVT_LAMBDA}"
+  fi
+fi
 PACK_DIR="${PACK_DIR:-${OUTPUT_ROOT}/packed}"
 PPL_DIR="${PPL_DIR:-${OUTPUT_ROOT}/ppl}"
 mkdir -p "${PACK_DIR}" "${PPL_DIR}"
@@ -142,7 +148,7 @@ if [[ -z "${CALIB_TOKENS_PATH:-}" && -s "${LEGACY_CALIB_TOKENS}" ]]; then
   log "Using existing online calibration token cache: ${CALIB_TOKENS_PATH}"
 fi
 log "Model=${MODEL}; calib=${DATASET} n=${NSAMPLES} seqlen=${SEQLEN}; targets=${PPL_TARGETS}; attn=${ATTN_IMPLEMENTATION}"
-log "RBVT guard: lambda=${RBVT_LAMBDA}, budget_p=${RBVT_BUDGET_P}, target_ratio=${RBVT_TARGET_RATIO}, mse_guard=${RBVT_MSE_GUARD}"
+log "RBVT config: lambda=${RBVT_LAMBDA}, budget_p=${RBVT_BUDGET_P}, target_ratio=${RBVT_TARGET_RATIO}, mse_guard=${RBVT_MSE_GUARD}, output=${RBVT_DIR}"
 
 count_files() {
   local dir="$1"
