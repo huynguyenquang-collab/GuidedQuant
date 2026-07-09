@@ -50,6 +50,16 @@ def maybe_empty_cache(args, batch_idx):
         cleanup_cuda()
 
 
+def atomic_torch_save(payload, path):
+    tmp_path = f"{path}.tmp.{os.getpid()}"
+    try:
+        torch.save(payload, tmp_path)
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
 def collect_fisher_group(model, layers, model_type, layer_ids, tokens, limit, args, device):
     pending_layer_ids = []
     for layer_idx in layer_ids:
@@ -130,7 +140,7 @@ def collect_fisher_group(model, layers, model_type, layer_ids, tokens, limit, ar
                         raise RuntimeError(f"No Fisher gradient collected for layer {layer_idx} module {module_name}")
                     payload[module_name] = module.weight.grad.detach().float().cpu()
             path = os.path.join(args.output_path, f"layer_{layer_idx}.pt")
-            torch.save(payload, path)
+            atomic_torch_save(payload, path)
             print(f"Saved Fisher chunk: {path}")
             del payload
     finally:
