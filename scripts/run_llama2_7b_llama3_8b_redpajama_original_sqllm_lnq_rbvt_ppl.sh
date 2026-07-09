@@ -15,6 +15,9 @@ if [[ ! -x "${BASE_SCRIPT}" ]]; then
 fi
 
 PYTHON_BIN="${PYTHON_BIN:-/mnt/tp/miniconda/envs/nuquant/bin/python}"
+MODEL_TARGETS="${MODEL_TARGETS:-llama2_7b llama3_8b}"
+LLAMA2_MODEL="${LLAMA2_MODEL:-meta-llama/Llama-2-7b-hf}"
+LLAMA3_MODEL="${LLAMA3_MODEL:-meta-llama/Meta-Llama-3-8B}"
 BIT="${BIT:-3}"
 DATASET="${DATASET:-redpajama}"
 NSAMPLES="${NSAMPLES:-1024}"
@@ -122,15 +125,22 @@ run_model() {
   bash "${BASE_SCRIPT}"
 }
 
-run_model \
-  "meta-llama/Llama-2-7b-hf" \
-  "llama2_7b" \
-  "cache/tokens/Llama-2-7b-hf-redpajama_s1024_blk4096.pt"
-
-run_model \
-  "meta-llama/Meta-Llama-3-8B" \
-  "llama3_8b" \
-  "cache/tokens/Meta-Llama-3-8B-redpajama_s1024_blk4096.pt"
+for target in ${MODEL_TARGETS}; do
+  case "${target}" in
+    llama2_7b)
+      run_model "${LLAMA2_MODEL}" "${target}" \
+        "cache/tokens/Llama-2-7b-hf-redpajama_s1024_blk4096.pt"
+      ;;
+    llama3_8b)
+      run_model "${LLAMA3_MODEL}" "${target}" \
+        "cache/tokens/Meta-Llama-3-8B-redpajama_s1024_blk4096.pt"
+      ;;
+    *)
+      echo "Unknown MODEL_TARGETS entry: ${target}" >&2
+      exit 2
+      ;;
+  esac
+done
 
 log "Done. Results:"
 log "  outputs/llama2_7b_3bit_redpajama_original_sqllm_lnq_rbvt/ppl"
