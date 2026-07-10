@@ -20,6 +20,27 @@ from squeezellm.model_parse import get_layers, get_named_modules, parse_model
 from squeezellm.outliers import remove_outliers
 
 
+def atomic_pickle_dump(payload, path):
+    tmp_path = f"{path}.tmp.{os.getpid()}"
+    try:
+        with open(tmp_path, "wb") as handle:
+            pickle.dump(payload, handle)
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
+def atomic_torch_save(payload, path):
+    tmp_path = f"{path}.tmp.{os.getpid()}"
+    try:
+        torch.save(payload, tmp_path)
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
 def parse_range(value):
     if value is None:
         return None
@@ -851,15 +872,13 @@ def quantize_luts(args):
             gc.collect()
             torch.cuda.empty_cache()
 
-        with open(lut_file, "wb") as handle:
-            pickle.dump(config, handle)
-        torch.save(logs, os.path.join(args.output_folder, "lut", f"log_l{layer_idx}.pt"))
+        atomic_pickle_dump(config, lut_file)
+        atomic_torch_save(logs, os.path.join(args.output_folder, "lut", f"log_l{layer_idx}.pt"))
         print(f"Saved layer LUT to {lut_file}")
 
         if outliers is not None:
             outlier_file = os.path.join(args.output_folder, "outliers", f"l{layer_idx}.pkl")
-            with open(outlier_file, "wb") as handle:
-                pickle.dump([x.to_sparse() for x in outliers[0]], handle)
+            atomic_pickle_dump([x.to_sparse() for x in outliers[0]], outlier_file)
 
 
 def main():
