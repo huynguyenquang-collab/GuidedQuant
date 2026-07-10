@@ -94,6 +94,53 @@ select_device() {
     echo "cpu"
     return
   fi
+  local visible="${CUDA_VISIBLE_DEVICES:-}"
+  local best_logical
+  if [[ -n "${visible}" && "${visible}" != "-1" ]]; then
+    best_logical="$(nvidia-smi --query-gpu=index,memory.free,utilization.gpu --format=csv,noheader,nounits \
+      | awk -F, -v visible="${visible}" -v min_free="${GPU_MIN_FREE_MB}" -v max_util="${GPU_MAX_UTIL}" '
+          BEGIN {
+            n = split(visible, raw, ",")
+            for (i = 1; i <= n; i++) {
+              gsub(/ /, "", raw[i])
+              if (raw[i] != "") {
+                physical_to_logical[raw[i]] = i - 1
+              }
+            }
+          }
+          {
+            gsub(/ /, "", $1); gsub(/ /, "", $2); gsub(/ /, "", $3);
+            if (($1 in physical_to_logical) && $2 >= min_free && $3 <= max_util) {
+              if ($2 > best_free) { best_free=$2; best=physical_to_logical[$1]; }
+            }
+          }
+          END { if (best != "") print best; }
+        ')"
+    if [[ -z "${best_logical}" ]]; then
+      best_logical="$(nvidia-smi --query-gpu=index,memory.free --format=csv,noheader,nounits \
+        | awk -F, -v visible="${visible}" '
+            BEGIN {
+              n = split(visible, raw, ",")
+              for (i = 1; i <= n; i++) {
+                gsub(/ /, "", raw[i])
+                if (raw[i] != "") {
+                  physical_to_logical[raw[i]] = i - 1
+                }
+              }
+            }
+            {
+              gsub(/ /, "", $1); gsub(/ /, "", $2);
+              if (($1 in physical_to_logical) && $2 > best_free) {
+                best_free=$2; best=physical_to_logical[$1]
+              }
+            }
+            END { if (best != "") print best; }
+          ')"
+    fi
+    echo "cuda:${best_logical:-0}"
+    return
+  fi
+
   local best
   best="$(nvidia-smi --query-gpu=index,memory.free,utilization.gpu --format=csv,noheader,nounits \
     | awk -F, -v min_free="${GPU_MIN_FREE_MB}" -v max_util="${GPU_MAX_UTIL}" '
@@ -109,7 +156,7 @@ select_device() {
     best="$(nvidia-smi --query-gpu=index,memory.free --format=csv,noheader,nounits \
       | awk -F, '{gsub(/ /, "", $1); gsub(/ /, "", $2); if ($2 > best_free) {best_free=$2; best=$1}} END {print best}')"
   fi
-  echo "cuda:${best}"
+  echo "cuda:${best:-0}"
 }
 
 count_chunks() {
