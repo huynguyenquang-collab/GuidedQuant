@@ -197,11 +197,22 @@ def bv_greedy_split(x, mu, h, K, bias_lambda=1.0, min_size=1, eps=1e-12):
 
 
 def build_assignment(n, intervals, order, codewords):
-    labels_sorted = np.empty(n, dtype=np.int64)
-    q_sorted = np.empty(n, dtype=np.float32)
+    labels_sorted = np.zeros(n, dtype=np.int64)
+    q_sorted = np.zeros(n, dtype=np.float32)
+    covered = np.zeros(n, dtype=bool)
     for k, (l, r) in enumerate(intervals):
+        if l < 0 or r >= n or l > r:
+            raise ValueError(f"Invalid BV-SQ interval {(l, r)} for row length {n}")
         labels_sorted[l : r + 1] = k
         q_sorted[l : r + 1] = codewords[k]
+        covered[l : r + 1] = True
+    if not covered.all():
+        missing = np.nonzero(~covered)[0]
+        preview = missing[:8].tolist()
+        raise RuntimeError(
+            f"BV-SQ intervals do not cover the full row; missing {missing.size} positions, "
+            f"first missing={preview}"
+        )
     labels_original = np.empty(n, dtype=np.int64)
     q_original = np.empty(n, dtype=np.float32)
     labels_original[order] = labels_sorted
@@ -220,6 +231,11 @@ def bv_sq_row(w_row, mu, h, K, solver="greedy", bias_lambda=1.0, min_size=1, eps
     if len(codewords) < K:
         codewords = list(codewords) + [codewords[-1] if codewords else 0.0] * (K - len(codewords))
     labels, q_row = build_assignment(len(w_row), intervals, order, codewords)
+    if labels.min(initial=0) < 0 or labels.max(initial=0) >= len(codewords):
+        raise RuntimeError(
+            f"BV-SQ produced invalid labels: min={labels.min()} max={labels.max()} "
+            f"num_codewords={len(codewords)}"
+        )
     return np.asarray(codewords, dtype=np.float32), labels.astype(np.uint8), q_row
 
 
