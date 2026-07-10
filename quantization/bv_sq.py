@@ -146,22 +146,28 @@ def bv_hier_split(x, mu, h, K, bias_lambda=1.0, min_size=1, eps=1e-12):
     prefix = build_prefix_sums(x, mu, h)
     intervals = [(0, len(x) - 1)]
     while len(intervals) < K:
+        split_candidates = []
+        for idx, (l, r) in enumerate(intervals):
+            gain, t = _best_split_fast(prefix, l, r, bias_lambda, min_size, eps)
+            if t is not None:
+                split_candidates.append((gain, idx, t))
+        if not split_candidates:
+            break
+
+        remaining = K - len(intervals)
+        if len(split_candidates) > remaining:
+            split_candidates = sorted(split_candidates, reverse=True)[:remaining]
+        selected = {idx: t for _gain, idx, t in split_candidates}
+
         new_intervals = []
-        changed = False
-        for l, r in intervals:
-            _gain, t = _best_split_fast(prefix, l, r, bias_lambda, min_size, eps)
+        for idx, (l, r) in enumerate(intervals):
+            t = selected.get(idx)
             if t is None:
                 new_intervals.append((l, r))
             else:
                 new_intervals.append((l, t))
                 new_intervals.append((t + 1, r))
-                changed = True
         intervals = new_intervals
-        if not changed:
-            break
-        if len(intervals) >= K:
-            intervals = intervals[:K]
-            break
     intervals = sorted(intervals, key=lambda p: p[0])
     codewords = [interval_cost(prefix, l, r, bias_lambda, eps)[1] for l, r in intervals]
     return intervals, codewords
