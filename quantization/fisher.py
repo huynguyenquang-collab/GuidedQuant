@@ -90,25 +90,22 @@ def collect_fisher_group(model, layers, model_type, layer_ids, tokens, limit, ar
                 module.weight.grad = None
                 selected_modules.append(module)
 
-                if accum_device == "cpu":
-                    accum.setdefault(layer_idx, {})[module_name] = torch.zeros_like(
-                        module.weight, dtype=torch.float32, device="cpu"
-                    )
+                target_device = "cpu" if accum_device == "cpu" else module.weight.device
+                accum.setdefault(layer_idx, {})[module_name] = torch.zeros_like(
+                    module.weight, dtype=torch.float32, device=target_device
+                )
 
-                    def make_cpu_hook(target_layer_idx, target_name):
-                        def hook(grad):
-                            accum[target_layer_idx][target_name].add_(grad.detach().float().cpu().square())
-                            return torch.zeros_like(grad)
+                def make_accum_hook(target_layer_idx, target_name, target):
+                    def hook(grad):
+                        grad_sq = grad.detach().float().square()
+                        if target == "cpu":
+                            grad_sq = grad_sq.cpu()
+                        accum[target_layer_idx][target_name].add_(grad_sq)
+                        return torch.zeros_like(grad)
 
-                        return hook
+                    return hook
 
-                    handles.append(module.weight.register_hook(make_cpu_hook(layer_idx, module_name)))
-                else:
-
-                    def square_grad_hook(grad):
-                        return grad.detach().pow(2)
-
-                    handles.append(module.weight.register_hook(square_grad_hook))
+                handles.append(module.weight.register_hook(make_accum_hook(layer_idx, module_name, accum_device)))
 
         group_label = (
             f"{pending_layer_ids[0]}"
@@ -120,25 +117,18 @@ def collect_fisher_group(model, layers, model_type, layer_ids, tokens, limit, ar
         batch_starts = range(0, limit, args.batch_size)
         for batch_idx, start in enumerate(tqdm(batch_starts, desc=desc), start=1):
             batch = torch.cat(tokens[start : start + args.batch_size], dim=0).to(device)
-            if accum_device == "cpu":
-                model.zero_grad(set_to_none=True)
+            model.zero_grad(set_to_none=True)
             out = model(input_ids=batch, labels=batch, use_cache=False)
             out.loss.backward()
-            if accum_device == "cpu":
-                for module in selected_modules:
-                    module.weight.grad = None
+            for module in selected_modules:
+                module.weight.grad = None
             del batch, out
             maybe_empty_cache(args, batch_idx)
 
         for layer_idx in pending_layer_ids:
             payload = {}
             for module_name, module in modules_by_layer[layer_idx]:
-                if accum_device == "cpu":
-                    payload[module_name] = accum[layer_idx][module_name]
-                else:
-                    if module.weight.grad is None:
-                        raise RuntimeError(f"No Fisher gradient collected for layer {layer_idx} module {module_name}")
-                    payload[module_name] = module.weight.grad.detach().float().cpu()
+                payload[module_name] = accum[layer_idx][module_name].cpu()
             path = os.path.join(args.output_path, f"layer_{layer_idx}.pt")
             atomic_torch_save(payload, path)
             print(f"Saved Fisher chunk: {path}")
